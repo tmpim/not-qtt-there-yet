@@ -1,0 +1,35 @@
+name:                Qtt
+version:             0.1.0.0
+-- synopsis:
+-- description:
+homepage:            https://github.com/plt-hokusai/Qtt#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Abigail Magalhães
+maintainer:          magalhaes.alcantara@pucpr.edu.br
+copyright:           2020 Abigail Magalhães
+category:            Web
+build-type:          Simple
+cabal-version:       >=1.10
+extra-source-files:  README.md
+
+executable Qtt
+  hs-source-dirs:      src
+  main-is:             Main.hs
+  default-language:    Haskell2010
+  build-depends:       base >= 4.7 && < 5
+                     , mtl, transformers, containers, megaparsec
+  other-modules:       Qtt.Environment
+                     , Qtt.Evaluate
+                     , Qtt.Value
+                     , Qtt
+
+                     , Check.TypeError
+                     , Check.Subsumes
+                     , Check.Fresh
+                     , Check.Monad
+                     , Check.Data
+                     , Check
+
+                     , Presyntax
+  ghc-options:       -Wall -Wno-name-shadowing

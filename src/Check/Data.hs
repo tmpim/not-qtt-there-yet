@@ -1,0 +1,281 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RecordWildCards #-}
+{-
+
+Given a data type declaration of the form:
+
+data X Δ : τs → Set j where
+  c1 : Γ → X Δ τs'
+  c2 : Γ, (x : X Δ τs'), Γ' → X Δ τs''
+  c3 : Γ, (f : Π Ξ, X Δ τs'), Γ' → X Δ τs''
+
+Compute the type of the induction principle
+
+indX : Π Δ, tel(τs), (P : τs → X Δ τs → Set j)
+    -> (ec1 : Π Γ → P (c1 Γ))
+    -> (ec2 : Π Γ, (x : X Δ τ'), Γ' → (px : P x) → P (c2 Γ, x, Γ))
+    -> (ec3 : Π Γ, (x : Π Ξ, X Δ τ'), Γ' → (pf : Π Ξ, P (f Ξ)) → P (ec3 Γ, f, Γ'))
+    -> (x : X Δ tel(τs))
+    -> P x
+
+Where:
+  Γ, Γ' denotes telescope composition
+  tel(τ) denotes a telescope of fresh variables binding the indices in τs
+  Δ, Ξ, Γ and co denote telescopes
+
+Additionally, compute the definition of indX.
+(The implementation is unique up to function extensionality,
+and its definition is entirely implied by its type.)
+-}
+module Check.Data where
+
+import Control.Monad.Except (MonadError(throwError))
+import Control.Monad.Identity
+import Control.Arrow
+
+import Data.Traversable
+
+import Check.Subsumes
+import Check.TypeError
+import Check.Fresh
+import Check.Monad
+
+import Qtt.Evaluate
+import Qtt
+import Debug.Trace (traceShow)
+import qualified Data.Map.Strict as Map
+
+data Data var =
+  Data { dataName :: var
+       , dataArgs :: [(var, Value var)]
+       , dataKind :: Value var
+       , dataCons :: [(var, Value var)]
+       }
+  deriving (Eq, Show)
+
+{-
+for a type like
+data X Δ : τ → Set j where
+
+the induction principle is quantified over Δ but the proposition is parametrised by a τ. Like:
+indX : Δ (x : τ) (P : (x : τ) → X Δ τ → Set j) → ... → (a : X Δ τ) → P x a
+
+the case for each constructor is derived like this:
+- first, we split the constructor's term into a quantifying telescope Ξ and a return σ, of form X Δ' τs
+  (given Δ' ≡ Δ)
+- the case is quantified over every argument Ξ of the constructor, and
+- for each argument r : X Δ τs ∈ Ξ, the case is quantified over a (x : P τs r)
+- for each argument f : Π Δ' → X Δ τs ∈ Ξ, the case is quantified over a (x : Π Δ' → P τs (f Δ'))
+- the return value of the case is P τs (con Ξ)
+-}
+
+makeInductionPrinciple :: forall m var. TypeCheck var m => Data var -> m (Value var)
+makeInductionPrinciple Data{..} =
+  do
+    let args_quoted = map (second quote) dataArgs
+
+    motive <- freshWithHint "P"
+    the_datum <- freshWithHint ("t" ++ show dataName)
+
+    (ixes, level) <- getIxTele dataKind
+    let sort = Set level
+    let datum = appToTele (Var dataName) (args_quoted ++ ixes)
+        datum :: Elim var
+
+    let motiveSort = quantify ixes $ Pi the_datum (Elim datum) sort
+    let motiveT :: (var, Term var)
+        motiveT = (motive, motiveSort)
+
+    let check = mkCheck (length ixes) (appToTele (Var dataName) args_quoted)
+    cases <- traverse (makeConCase (length ixes) check motive) dataCons
+
+    evaluate (quantify (args_quoted ++ ixes ++ [motiveT] ++ cases ++ [(the_datum, Elim datum)])
+                (Elim (appToTele (Var motive) (ixes ++ [(the_datum, Elim datum)]))))
+  where
+    getProp motive ixes = foldl App (Var motive) ixes
+
+    -- Build the type for one constructor case.
+    -- Arguments:
+    --    the count of indices of the data type
+    --    a function to checke whether return kinds are correct, and, if so, return the indices for this constructor
+    --    the elimination motive, evaluated
+    --    the constructor name, and the constructor's kind
+    makeConCase ixC checkKind motive (con, kind) = do
+      (tele, ret) <- splitPi kind
+      let con_appd = appToTele (Var con) (fmap quote <$> tele)
+          tele' = fmap quote <$> tele
+
+      ixes <- checkKind (quote ret)
+      inductiveArgs <- for (getInductives ixC tele) $ \(v, ixes, q, thing) -> do
+        newv <- refresh v
+        pure (newv, q $ Elim (App (getProp motive ixes) (Elim thing)))
+
+      c <- freshWithHint ("case{" ++ show con ++ "}")
+      pure (c, (quantify (tele' ++ inductiveArgs) (Elim (App (getProp motive ixes) (Elim con_appd)))))
+
+    -- Build a checker function for a data type with n indices, with parameters ki
+    mkCheck :: Int -> Elim var -> Term var -> m [(Term var)]
+    mkCheck len ki (Elim ki') = do
+      let (ki'', dropped) = dropArgs ki' len
+      t <- evaluate (Elim ki)
+      q <- evaluate (Elim ki'')
+      subsumes t q
+      pure (reverse dropped)
+    mkCheck _ w h = throwError (WrongDataReturn w h)
+
+    -- Build the induction cases.
+    getInductives :: Int -> [(var, Value var)] -> [(var, [Term var], Term var -> Term var, Elim var)]
+    getInductives _ [] = []
+
+    -- x : Y Ξ τs:
+    getInductives ixC ((v, VNe t'):rst)
+      | elimHead t == Var dataName =      -- Y ≡ X. Strictly speaking we should check the indices line up here
+          let (_, here_ixes) = dropArgs t ixC
+           in (v, here_ixes, id, Var v):getInductives ixC rst
+      | otherwise = getInductives ixC rst -- ¬(Y ≡ X); This variable doesn't get induced over
+      where t = quoteNeutral t'
+
+    -- f : Π Δ', Y Ξ τs
+    getInductives ixC ((v, ty@VPi{}):rst)
+      -- Where Y ≡ X,
+      -- build an induction hypothesis of the form 
+      -- Π Δ', P (f Δ')
+      | Elim t <- t, elimHead t == Var dataName =
+          let (_, here_ixes) = dropArgs t ixC
+           in (v, here_ixes, quantify (fmap quote <$> tele), appToTele (Var v) tele):getInductives ixC rst
+
+      -- Some other function type. Ignore it
+      | otherwise = getInductives ixC rst
+      where (tele, ret) = splitPi_pure ty
+            t = quote ret
+
+    -- Something else (Set, etc). Just ignore it
+    getInductives ixC ((_, _):rst) = getInductives ixC rst
+
+{-
+for a type like
+
+data X Δ : τ → Set j where
+  case1 : X Δ τ
+  case2 : X Δ τ' → (Y → X Δ τ'') → X Δ τ''
+
+the recursor has the form
+induction Δ τ c1 c2 case1       = c1 τ
+induction Δ τ c1 c2 (case2 r f) = c2 τ (induction Δ τ c1 c2 r) (λ x → induction Δ τ c1 c2 (f x))
+-}
+makeRecursor :: forall m var. TypeCheck var m => var -> Data var -> m (Value var)
+makeRecursor name Data{..} =
+  do
+    (tele, _) <- getIxTele dataKind
+    let argNames = fst <$> dataArgs
+        conNames = fst <$> dataCons
+        teleNames = fst <$> tele
+    motive <- freshWithHint "P"
+    value  <- freshWithHint "value"
+    let recursor = makeRecursor cases [] (length argNames, length teleNames) (argNames ++ conNames ++ teleNames ++ [motive, value])
+        cases    = foldMap (\(i, (var, ty)) -> Map.singleton var (i, goForCase recursor (fst (splitPi_pure ty)))) (zip [0..] dataCons)
+    pure recursor
+  where
+    -- Given:
+    -- * A map between constructors and functions which recur on the right arguments
+    --     (or build lambdas to recur under, in case of arguments of type Π Δ', X Δ τ)
+    -- * An accumulator for values
+    -- * A pair containing the number of arguments and indices to the data type we're
+    --     eliminating
+    -- * A list `arg`, to drive collection of arguments (could be a number, only used for its size)
+    -- 
+    -- Compute:
+    --   A function which accumulates `length arg` arguments, splits on the last of these,
+    --   and eliminates the data type X Δ.
+    makeRecursor :: Map.Map var (Int, [Value var] -> [Value var] -> [Value var]) -> [Value var] -> (Int, Int) -> [var] -> Value var
+    makeRecursor cases acc (nArgs, nIndices) [] =
+      case acc of
+        head:_ | Just ((i, worker), cArgs) <- isCon cases head ->
+          traceShow (args !! (skip + i), take nIndices (drop nArgs acc), cArgs) $ foldl (@@) (args !! (skip + i)) (worker cArgs (take nIndices (drop nArgs acc)))
+        _ -> (foldl (@@) (valueVar name) (reverse acc))
+      where
+        args = reverse acc
+        skip = nArgs + nIndices + 1
+    makeRecursor cases acc skip (n:rest) = VFn n (\v -> makeRecursor cases (v:acc) skip rest)
+
+    -- Is the given value a neutral application of a constructor of this data type?
+    isCon :: Map.Map var (Int, [Value var] -> [Value var] -> [Value var])
+          -> Value var
+          -> Maybe ((Int, [Value var] -> [Value var] -> [Value var]), [Value var])
+    isCon cases (VNe (NApp (NVar x) args)) = flip (,) (reverse args) <$> Map.lookup x cases
+    isCon _ _ = Nothing
+
+    -- Build the individual eliminator for each case, given:
+    --   * a reference to the recursor (yay, knot-tying!)
+    --   * A telescope of this constructor's arguments
+    --
+    -- Compute a function that, given:
+    --   * The arguments passed to this constructor, and
+    --   * The arguments that do not change (indices)
+    --
+    -- Computes: The arguments to this data type, with recursive
+    -- occurences eliminated (even under lambda).
+    goForCase :: Value var -> [(var, Value var)] -> [Value var] -> [Value var] -> [Value var]
+    goForCase _ []  _ _                         = []
+
+    -- a : Y Δ' τ
+    goForCase recursor ((_, VNe t'):rst) (arg:args) extraArgs
+      | elimHead (quoteNeutral t') == Var dataName
+      -- Y ≡ X, recur
+      = (foldl (@@) recursor extraArgs) @@ arg:goForCase recursor rst args extraArgs
+      -- ← (Y ≡ X), pass along
+      | otherwise = arg:goForCase recursor rst args extraArgs
+
+    -- f : Π Ξ, Y Δ' τ
+    goForCase recursor ((_, ty@VPi{}):rst) (argf:args) extraArgs
+      -- Y ≡ X, build λ Ξ → recursor (f Ξ) (i.e., recursor . f, but polymorphic over a telescope)
+      | Elim t <- t, elimHead t == Var dataName =
+         makeFun recursor (fst (splitPi_pure ty)) argf:goForCase recursor rst args extraArgs
+      -- ¬ (Y ≡ X), pass along
+      | otherwise = argf:goForCase recursor rst args extraArgs
+      where (_, ret) = splitPi_pure ty
+            t = quote ret
+
+    -- Different thing (Set, etc), just pass it along
+    goForCase recursor ((_, _):rst) (arg:args) extraArgs = arg:goForCase recursor rst args extraArgs
+
+-- Given recursor, Ξ and f, build λ Ξ → recursor (f Ξ)
+makeFun :: Value var -> [(var, Value var)] -> Value var -> Value var
+makeFun recursor []  x         = recursor @@ x
+makeFun recursor ((n, _):xs) f = VFn n $ \a -> makeFun recursor xs (f @@ a)
+
+getIxTele :: TypeCheck var m => Value var -> m ([(var, Term var)], Int)
+getIxTele kind = do
+  (tele, i) <- splitPi kind
+  case i of
+    VSet j -> pure (fmap quote <$> tele, j)
+    _ -> throwError (InvalidDataKind i)
+
+splitPi' :: Monad m => (var -> m var) -> Value var -> m ([(var, Value var)], Value var)
+splitPi' rename (VPi v domain rest) = do
+  v' <- rename v
+  first ((v', domain):) <$> splitPi' rename (rest (valueVar v'))
+splitPi' _ t = pure ([], t)
+
+splitPi :: TypeCheck var m => Value var -> m ([(var, Value var)], Value var)
+splitPi = splitPi' refresh
+
+splitPi_pure :: Value var -> ([(var, Value var)], Value var)
+splitPi_pure = runIdentity . splitPi' pure
+
+quantify :: [(var, Term var)] -> Term var -> Term var
+quantify [] t          = t
+quantify ((v, t):qs) r = Pi v t (quantify qs r)
+
+appToTele :: Elim var -> [(var, b)] -> Elim var
+appToTele x [] = x
+appToTele x ((v, _):xs) = appToTele (App x (Elim (Var v))) xs
+
+dropArgs :: Elim var -> Int -> (Elim var, [Term var])
+dropArgs x 0 = (x, [])
+dropArgs (App f t) n = second (t:) $ dropArgs f (n - 1)
+
+elimHead :: Elim var -> Elim var
+elimHead (App f _) = elimHead f
+elimHead x = x
