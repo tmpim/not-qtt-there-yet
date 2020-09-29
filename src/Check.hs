@@ -1,9 +1,10 @@
 {-# LANGUAGE FlexibleContexts #-}
 module Check where
 
-import Control.Monad.IO.Class
-import Control.Monad.Reader (MonadReader)
-import Control.Monad.Except (throwError, MonadError)
+import Control.Monad.Reader
+
+import Data.Traversable
+import Data.Foldable
 
 import qualified Presyntax as P
 
@@ -15,80 +16,204 @@ import Check.TypeError ( TypeError(..) )
 import Check.Subsumes ( subsumes )
 import Check.Monad
 import Check.Fresh
-import Debug.Trace (traceShow)
+import Check.Data
 
-check :: TypeCheck a m => P.Expr a -> Value a -> m (Term a)
-check ex t | traceShow (ex, "checks", t) False = undefined
-check P.Set value = do
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
+import Data.Sequence (Seq)
+import qualified Data.Sequence as Seq
+
+checkLoc :: TypeCheck a m => P.ExprL a -> Value a -> m (Term a)
+checkLoc t v = withLocation t $ \ex -> checkRaw ex v
+
+checkRaw :: TypeCheck a m => P.Expr P.L a -> Value a -> m (Term a)
+checkRaw (P.Set j) value = do
   i <- isSet value
-  pure (Set i)
+  unless (j < i) $
+    typeError (TypeTooBig j i)
+  pure (Set j)
 
-check (P.Lam var body) term = do
-  (dom, range) <- isPiType (Just var) term
+checkRaw (P.Lam var body) term = do
+  (dom, range, _wp) <- isPiType False (Just var) term
   term <-
     assume var dom $
-      check body (range (valueVar var))
+      checkLoc body (range (valueVar var))
   pure (Lam var term)
 
-check (P.Pi var domain range) i = do
+checkRaw (P.Pi var domain range) i = do
   i <- isSet i
-  term <- check domain (VSet i)
+  term <- checkLoc domain (VSet i)
   domain <- evaluate term
   assume var domain $ do
-    range <- check range (VSet i)
-    pure (Pi var term range)
+    range <- checkLoc range (VSet i)
+    pure (Pi var Visible term range)
 
-check exp expected = do
-  (term, ty) <- infer exp
-  traceShow (ty, expected) $
-    subsumes ty expected
+checkRaw P.Hole ty = do
+  m <- freshMeta ty
+  pure (quote m)
+
+checkRaw exp expected = do
+  (term, ty) <- inferRaw exp
+  subsumes ty expected
   pure (Elim term)
 
-infer :: TypeCheck a m
-      => P.Expr a -> m (Elim a, Value a)
-infer ex | traceShow (ex, "infers") False = undefined
-infer (P.Var a) = do
+inferLoc :: TypeCheck a m => P.ExprL a -> m (Elim a, Value a)
+inferLoc = flip withLocation inferRaw
+
+inferRaw :: TypeCheck a m => P.Expr P.L a -> m (Elim a, Value a)
+inferRaw (P.Var a) = do
   t <- lookupType a
   case t of
-    Just ty ->
-      traceShow ("inferred", Var a, ty)
-      pure (Var a, ty)
-    Nothing -> throwError (NotInScope a)
-infer (P.App a b) = do
-  (elimA, tyA) <- infer a
-  (dom, range) <- isPiType Nothing tyA
-  (termB) <- check b dom
+    Just ty -> pure (Var a, ty)
+    Nothing -> typeError (NotInScope a)
+
+inferRaw (P.App t a b) = do
+  (elimA, tyA) <- inferLoc a
+  (dom, range, wp) <- isPiType t Nothing tyA
+  (termB) <- checkLoc b dom
   nfB <- evaluate termB
-  pure (elimA `App` termB, range nfB)
-infer (P.Cut a b) = do
-  tyB <- check b (VSet 0)
+  pure (wp elimA `App` termB, range nfB)
+  
+inferRaw (P.Cut a b) = do
+  tyB <- checkLoc b (VSet 0)
   nfB <- evaluate tyB
-  tA <- check a nfB
+  tA <- checkLoc a nfB
   pure (Cut tA tyB, nfB)
-infer P.Hole = do
-  ~(VNe tm) <- freshMeta
-  t <- freshMeta
-  pure (quoteNeutral tm, t)
-infer e = do
-  x <- freshMeta
-  term <- check e x
-  x <- zonk x
+
+inferRaw P.Hole = do
+  ty <- freshMeta (VSet maxBound)
+  ~(VNe tm) <- freshMeta ty
+  pure (quoteNeutral tm, ty)
+
+inferRaw (P.Set i) = pure (Cut (Set i) (Set (i + 1)), VSet (i + 1))
+
+inferRaw e = do
+  x <- freshMeta (VSet maxBound)
+  term <- checkRaw e x
   pure (Cut term (quote x), x)
 
+instantiate :: TypeCheck a m => Value a -> m (Seq (Value a), Value a)
+instantiate (VPi _var Invisible dom range) = do
+  meta <- freshMeta dom
+  (seq, r) <- instantiate (range meta)
+  pure (seq Seq.:|> meta, r)
+instantiate t = pure (mempty, t)
+
+checkDeclLoc :: TypeCheck var m => P.L (P.Decl P.L var) -> m (m b -> m b)
+checkDeclLoc = flip withLocation checkDeclRaw
+
+checkDeclRaw :: TypeCheck var m => P.Decl P.L var -> m (m b -> m b)
+checkDeclRaw (P.TypeSig var ty) = do
+  c <- checkLoc ty (VSet maxBound)
+  nf_c <- evaluate c
+  pure (assume var nf_c . local (\x -> x { unproven = Map.insert var (P.L () (P.lRange ty)) (unproven x), toplevel = Set.insert var (toplevel x) }))
+
+checkDeclRaw (P.Value var dec) = do
+  let prove x = x { unproven = Map.delete var (unproven x), toplevel = Set.insert var (toplevel x) }
+  ty <- lookupType var
+  case ty of
+    Just sig -> do
+      c <- checkLoc dec sig
+      nf_c <- evaluate c
+      pure (local (insertDecl var nf_c . prove))
+    Nothing -> do
+      (t, ty) <- inferLoc dec
+      nf_c <- evaluate (Elim t)
+      pure (declare var ty nf_c . local prove)
+
+checkDeclRaw (P.DataDecl name eliminator dataParams dataKind constructors) = do
+  params <- checkTelescope dataParams . flip withLocation $ \(name, sort) -> do
+    sort <- checkLoc sort (VSet maxBound)
+    sort_nf <- evaluate sort
+    pure (name, sort_nf)
+  let param_pi_tel v = fmap (\(a, b) -> (a, v, quote b)) params
+
+  (sorts, the_data) <- assuming params $ do
+    kind <- checkLoc dataKind (VSet maxBound)
+    kind_nf <- evaluate kind
+    l <- withLocation dataKind $ \_ -> isSet (snd (splitPi_pure kind_nf))
+    closed <- evaluate (quantify (param_pi_tel Visible) kind)
+    
+    -- now that we know the level of the data type we need to go back and check all of the parameters
+    -- ... again ...
+    _ <- checkTelescope dataParams . flip withLocation $ \(name, sort) -> do
+      sort <- checkLoc sort (VSet (succ l))
+      sort_nf <- evaluate sort
+      pure (name, sort_nf)
+
+    constrs <- assume name closed $ do
+      for constructors . flip withLocation $ \(name, sort) -> do
+        sort <- checkLoc sort (VSet l)
+        sort_nf <- evaluate sort
+        pure (name, sort, sort_nf)
+    
+    visibleSorts <- traverse (\(a, b, _) -> (,) a <$> evaluate (quantify (param_pi_tel Invisible) b)) constrs
+    pure ((name, closed):visibleSorts, Data name params kind_nf (map (\(a, _, b) -> (a, b)) constrs))
+
+  fakeCons <- for constructors . flip withLocation $ \(name, _) -> do
+    ignored <- refresh name
+    pure (constN ignored (length params) (valueVar name))
+
+  induction <- makeInductionPrinciple the_data
+  recursor <- makeRecursor eliminator the_data
+
+  pure ( assume name (snd (head sorts))
+       . foldr (\((a, b), c) r -> declare a b c . r) id (zip (tail sorts) fakeCons)
+       . declare eliminator induction recursor
+       . local (\x -> x { toplevel = Set.union (Set.fromList (eliminator:map fst sorts)) (toplevel x) }))
+
+const' :: var -> Value var -> Value var
+const' x v = VFn x (const v)
+
+constN :: Fresh var => var -> Int -> Value var -> Value var
+constN _ 0 x = x
+constN var n x = const' var (constN var (n - 1) x)
+
+checkTelescope :: TypeCheck var m => [a] -> (a -> m (var, Value var)) -> m [(var, Value var)]
+checkTelescope [] _ = pure []
+checkTelescope (this:rest) cont = do
+  (name, kind) <- cont this
+  assume name kind $
+    (:) (name, kind) <$> checkTelescope rest cont
+
+checkProgram :: TypeCheck var m => [P.L (P.Decl P.L var)] -> m b -> m b
+checkProgram [] kont = do
+  unp <- asks unproven
+  unless (Map.null unp) $ do
+    for_ (Map.toList unp) $ \(m, loc) ->
+      withLocation loc $ \() -> typeError (Undefined m)
+
+  kont
+checkProgram (d:ds) kont = flip id (checkProgram ds kont) =<< checkDeclLoc d
+
 isPiType :: TypeCheck a m
-         => Maybe a -> Value a -> m (Value a, Value a -> Value a)
-isPiType _ (VPi _ a b) = pure (a, b)
-isPiType hint t = do
+         => Bool    -- Visbility override?
+         -> Maybe a
+         -> Value a
+         -> m ( Value a
+              , Value a -> Value a
+              , Elim a -> Elim a
+              )
+isPiType _ _ (VPi _ Visible a b) = pure (a, b, id)
+isPiType True _ (VPi _ Invisible a b) = pure (a, b, id)
+
+isPiType False hint (VPi _ Invisible dom rng) = do
+  meta <- freshMeta dom
+  (domain, range, inner) <- isPiType False hint (rng meta)
+  pure (domain, range, \x -> App (inner x) (quote meta))
+
+isPiType _ _ ty@VSet{} = typeError (NotPi ty)
+isPiType _ _ ty@VFn{} = typeError (NotPi ty)
+isPiType over hint t = do
   name <- case hint of
     Just t -> pure t
     Nothing -> fresh
-  domain <- freshMeta
+  domain <- freshMeta (VSet maxBound)
   assume name domain $ do
-    range <- freshMeta
-    subsumes t (VPi name domain (const range))
-    pure (domain, const range)
+    range <- freshMeta (VSet maxBound)
+    subsumes t (VPi name (if over then Invisible else Visible) domain (const range))
+    pure (domain, const range, id)
 
-isSet :: (Fresh a, MonadError (TypeError a) m, MonadIO m, MonadReader (Env a) m, Ord a, Show a)
-      => Value a -> m Int
+isSet :: TypeCheck a m => Value a -> m Int
 isSet (VSet i) = pure i
-isSet t = throwError (NotSet t)
+isSet t = typeError (NotSet t)

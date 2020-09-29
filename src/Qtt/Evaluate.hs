@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE FlexibleContexts, ScopedTypeVariables #-}
 module Qtt.Evaluate where
 
@@ -7,22 +8,25 @@ import Control.Concurrent
 
 import Qtt.Environment
 import Qtt
+import System.IO.Unsafe (unsafePerformIO)
+import Control.Monad.Reader (ReaderT(runReaderT))
+import qualified Data.Sequence as Seq
 
-evaluate :: (MonadReader (Env a) m, Ord a) => Term a -> m (Value a)
+evaluate :: (MonadReader (Env a) m, Ord a, Show a) => Term a -> m (Value a)
 evaluate (Elim a) = evaluateNeutral a
 evaluate (Lam a b) = do
   env <- ask
   pure (VFn a (\arg -> evaluateArrow b (insertDecl a arg env)))
-evaluate (Pi var a b) = do
+evaluate (Pi var vis a b) = do
   env <- ask
   a <- evaluate a
-  pure (VPi var a (\arg -> evaluateArrow b (insertDecl var arg env)))
+  pure (VPi var vis a (\arg -> evaluateArrow b (insertDecl var arg env)))
 evaluate (Set i) = pure (VSet i)
 
-evaluateArrow :: Ord a => Term a -> Env a -> Value a
+evaluateArrow :: (Ord a, Show a) => Term a -> Env a -> Value a
 evaluateArrow = evaluate
 
-evaluateNeutral :: (MonadReader (Env a) m, Ord a) => Elim a -> m (Value a)
+evaluateNeutral :: (MonadReader (Env a) m, Ord a, Show a) => Elim a -> m (Value a)
 evaluateNeutral (Meta mv) = pure (VNe (NMeta mv))
 evaluateNeutral (Cut a _) = evaluate a
 evaluateNeutral (Var v) = do
@@ -39,15 +43,15 @@ evaluateNeutral (App a b) = do
       pure (VNe n @@ b)
     _ -> error "Type error during evaluation of neutral application"
 
-zonk :: (MonadIO m, MonadReader (Env var) m, Ord var) => Value var -> m (Value var)
+zonk :: (MonadIO m, MonadReader (Env var) m, Ord var, Show var) => Value var -> m (Value var)
 zonk (VNe n) = zonkNeutral n where
-  zonkNeutral (NApp mv@(NMeta (MV _ mvar _blocked)) ts) = do
-    t <- liftIO $ tryReadMVar mvar
+  zonkNeutral (NApp mv@(NMeta MV{..}) ts) = do
+    t <- liftIO $ tryReadMVar metaSlot
     case t of
       Nothing -> VNe . NApp mv <$> traverse zonk ts
-      Just t -> zonk =<< evaluate t
-  zonkNeutral nm@(NMeta (MV _ mvar _blocked)) = do
-    t <- liftIO $ tryReadMVar mvar
+      Just t -> zonk . flip (foldl (@@)) (Seq.reverse ts) =<< evaluate t
+  zonkNeutral nm@(NMeta MV{..}) = do
+    t <- liftIO $ tryReadMVar metaSlot
     case t of
       Nothing -> pure (VNe nm)
       Just t -> zonk =<< evaluate t
@@ -56,9 +60,10 @@ zonk (VNe n) = zonkNeutral n where
     ts <- traverse zonk ts
     pure (foldl (@@) t ts)
   zonkNeutral (NVar v) = pure (VNe (NVar v))
-zonk (VPi var d r) = do
-  let range = r (valueVar var)
-  range <- quote <$> zonk range
-  env <- ask
-  VPi var <$> zonk d <*> pure (\arg -> evaluateArrow range (insertDecl var arg env))
+zonk (VPi var vis d r) = do
+  VPi var vis <$> zonk d <*> pure (\arg -> unsafeZonkDomain (r arg))
 zonk x = pure x
+
+-- What can I say but "Yikes".
+unsafeZonkDomain :: (Ord var, Show var) => Value var -> Value var
+unsafeZonkDomain v = unsafePerformIO (runReaderT (zonk v) =<< emptyEnv)

@@ -18,10 +18,9 @@ executable Qtt
   main-is:             Main.hs
   default-language:    Haskell2010
   build-depends:       base >= 4.7 && < 5
-                     , mtl, transformers, containers, megaparsec
+                     , mtl, transformers, containers, megaparsec, text, unordered-containers, hashable
   other-modules:       Qtt.Environment
                      , Qtt.Evaluate
-                     , Qtt.Value
                      , Qtt
 
                      , Check.TypeError
@@ -32,4 +31,8 @@ executable Qtt
                      , Check
 
                      , Presyntax
+                     , Presyntax.Parser
+                     , Presyntax.Lexer
+
+                     , Data.Range
   ghc-options:       -Wall -Wno-name-shadowing

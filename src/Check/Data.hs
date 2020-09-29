@@ -30,8 +30,8 @@ and its definition is entirely implied by its type.)
 -}
 module Check.Data where
 
-import Control.Monad.Except (MonadError(throwError))
-import Control.Monad.Identity
+
+import Control.Monad.Identity ( Identity(runIdentity) )
 import Control.Arrow
 
 import Data.Traversable
@@ -43,8 +43,9 @@ import Check.Monad
 
 import Qtt.Evaluate
 import Qtt
-import Debug.Trace (traceShow)
 import qualified Data.Map.Strict as Map
+import Data.Sequence (Seq)
+import qualified Data.Sequence as Seq
 
 data Data var =
   Data { dataName :: var
@@ -74,24 +75,26 @@ makeInductionPrinciple :: forall m var. TypeCheck var m => Data var -> m (Value 
 makeInductionPrinciple Data{..} =
   do
     let args_quoted = map (second quote) dataArgs
+        args_tele :: [(var, Visibility, Term var)]
+        args_tele   = map (\(a, b) -> (a, Visible, b)) args_quoted
 
     motive <- freshWithHint "P"
     the_datum <- freshWithHint ("t" ++ show dataName)
 
     (ixes, level) <- getIxTele dataKind
     let sort = Set level
-    let datum = appToTele (Var dataName) (args_quoted ++ ixes)
+    let datum = appToTele (Var dataName) (args_tele ++ ixes)
         datum :: Elim var
 
-    let motiveSort = quantify ixes $ Pi the_datum (Elim datum) sort
-    let motiveT :: (var, Term var)
-        motiveT = (motive, motiveSort)
+    let motiveSort = quantify ixes $ Pi the_datum Visible (Elim datum) sort
+    let motiveT :: (var, Visibility, Term var)
+        motiveT = (motive, Visible, motiveSort)
 
-    let check = mkCheck (length ixes) (appToTele (Var dataName) args_quoted)
+    let check = mkCheck (length ixes) (appToTele (Var dataName) args_tele)
     cases <- traverse (makeConCase (length ixes) check motive) dataCons
 
-    evaluate (quantify (args_quoted ++ ixes ++ [motiveT] ++ cases ++ [(the_datum, Elim datum)])
-                (Elim (appToTele (Var motive) (ixes ++ [(the_datum, Elim datum)]))))
+    evaluate (quantify (map invisCloak args_tele ++ map invisCloak ixes ++ [motiveT] ++ cases ++ [(the_datum, Visible, Elim datum)])
+                (Elim (appToTele (Var motive) (ixes ++ [(the_datum, Visible, Elim datum)]))))
   where
     getProp motive ixes = foldl App (Var motive) ixes
 
@@ -103,16 +106,16 @@ makeInductionPrinciple Data{..} =
     --    the constructor name, and the constructor's kind
     makeConCase ixC checkKind motive (con, kind) = do
       (tele, ret) <- splitPi kind
-      let con_appd = appToTele (Var con) (fmap quote <$> tele)
-          tele' = fmap quote <$> tele
+      let con_appd = appToTele (Var con) (fmap (\(a, b, c) -> (a, b, quote c)) tele)
+          tele' = fmap (\(a, b, c) -> (a, b, quote c)) tele
 
       ixes <- checkKind (quote ret)
       inductiveArgs <- for (getInductives ixC tele) $ \(v, ixes, q, thing) -> do
         newv <- refresh v
-        pure (newv, q $ Elim (App (getProp motive ixes) (Elim thing)))
+        pure (newv, Visible, q $ Elim (App (getProp motive ixes) (Elim thing)))
 
       c <- freshWithHint ("case{" ++ show con ++ "}")
-      pure (c, (quantify (tele' ++ inductiveArgs) (Elim (App (getProp motive ixes) (Elim con_appd)))))
+      pure (c, Visible, (quantify (tele' ++ inductiveArgs) (Elim (App (getProp motive ixes) (Elim con_appd)))))
 
     -- Build a checker function for a data type with n indices, with parameters ki
     mkCheck :: Int -> Elim var -> Term var -> m [(Term var)]
@@ -122,14 +125,14 @@ makeInductionPrinciple Data{..} =
       q <- evaluate (Elim ki'')
       subsumes t q
       pure (reverse dropped)
-    mkCheck _ w h = throwError (WrongDataReturn w h)
+    mkCheck _ w h = typeError (WrongDataReturn w h)
 
     -- Build the induction cases.
-    getInductives :: Int -> [(var, Value var)] -> [(var, [Term var], Term var -> Term var, Elim var)]
+    getInductives :: Int -> [(var, Visibility, Value var)] -> [(var, [Term var], Term var -> Term var, Elim var)]
     getInductives _ [] = []
 
     -- x : Y Ξ τs:
-    getInductives ixC ((v, VNe t'):rst)
+    getInductives ixC ((v, _, VNe t'):rst)
       | elimHead t == Var dataName =      -- Y ≡ X. Strictly speaking we should check the indices line up here
           let (_, here_ixes) = dropArgs t ixC
            in (v, here_ixes, id, Var v):getInductives ixC rst
@@ -137,13 +140,13 @@ makeInductionPrinciple Data{..} =
       where t = quoteNeutral t'
 
     -- f : Π Δ', Y Ξ τs
-    getInductives ixC ((v, ty@VPi{}):rst)
+    getInductives ixC ((v, _, ty@VPi{}):rst)
       -- Where Y ≡ X,
       -- build an induction hypothesis of the form 
       -- Π Δ', P (f Δ')
       | Elim t <- t, elimHead t == Var dataName =
           let (_, here_ixes) = dropArgs t ixC
-           in (v, here_ixes, quantify (fmap quote <$> tele), appToTele (Var v) tele):getInductives ixC rst
+           in (v, here_ixes, quantify (fmap (\(a, b, c) -> (a, b, quote c)) tele), appToTele (Var v) tele):getInductives ixC rst
 
       -- Some other function type. Ignore it
       | otherwise = getInductives ixC rst
@@ -151,7 +154,10 @@ makeInductionPrinciple Data{..} =
             t = quote ret
 
     -- Something else (Set, etc). Just ignore it
-    getInductives ixC ((_, _):rst) = getInductives ixC rst
+    getInductives ixC ((_, _, _):rst) = getInductives ixC rst
+
+invisCloak :: (var, Visibility, Term var) -> (var, Visibility, Term var)
+invisCloak (a, _, b) = (a, Invisible, b)
 
 {-
 for a type like
@@ -170,7 +176,7 @@ makeRecursor name Data{..} =
     (tele, _) <- getIxTele dataKind
     let argNames = fst <$> dataArgs
         conNames = fst <$> dataCons
-        teleNames = fst <$> tele
+        teleNames = fmap (\(a, _, _) -> a) tele
     motive <- freshWithHint "P"
     value  <- freshWithHint "value"
     let recursor = makeRecursor cases [] (length argNames, length teleNames) (argNames ++ conNames ++ teleNames ++ [motive, value])
@@ -188,11 +194,11 @@ makeRecursor name Data{..} =
     -- Compute:
     --   A function which accumulates `length arg` arguments, splits on the last of these,
     --   and eliminates the data type X Δ.
-    makeRecursor :: Map.Map var (Int, [Value var] -> [Value var] -> [Value var]) -> [Value var] -> (Int, Int) -> [var] -> Value var
+    makeRecursor :: Map.Map var (Int, Seq (Value var) -> [Value var] -> [Value var]) -> [Value var] -> (Int, Int) -> [var] -> Value var
     makeRecursor cases acc (nArgs, nIndices) [] =
       case acc of
         head:_ | Just ((i, worker), cArgs) <- isCon cases head ->
-          traceShow (args !! (skip + i), take nIndices (drop nArgs acc), cArgs) $ foldl (@@) (args !! (skip + i)) (worker cArgs (take nIndices (drop nArgs acc)))
+          foldl (@@) (args !! (skip + i)) (worker cArgs (take nIndices (drop nArgs acc)))
         _ -> (foldl (@@) (valueVar name) (reverse acc))
       where
         args = reverse acc
@@ -200,10 +206,10 @@ makeRecursor name Data{..} =
     makeRecursor cases acc skip (n:rest) = VFn n (\v -> makeRecursor cases (v:acc) skip rest)
 
     -- Is the given value a neutral application of a constructor of this data type?
-    isCon :: Map.Map var (Int, [Value var] -> [Value var] -> [Value var])
+    isCon :: Map.Map var (Int, Seq (Value var) -> [Value var] -> [Value var])
           -> Value var
-          -> Maybe ((Int, [Value var] -> [Value var] -> [Value var]), [Value var])
-    isCon cases (VNe (NApp (NVar x) args)) = flip (,) (reverse args) <$> Map.lookup x cases
+          -> Maybe ((Int, Seq (Value var) -> [Value var] -> [Value var]), Seq (Value var))
+    isCon cases (VNe (NApp (NVar x) args)) = flip (,) args <$> Map.lookup x cases
     isCon _ _ = Nothing
 
     -- Build the individual eliminator for each case, given:
@@ -216,11 +222,11 @@ makeRecursor name Data{..} =
     --
     -- Computes: The arguments to this data type, with recursive
     -- occurences eliminated (even under lambda).
-    goForCase :: Value var -> [(var, Value var)] -> [Value var] -> [Value var] -> [Value var]
+    goForCase :: Value var -> [(var, c, Value var)] -> Seq (Value var) -> [Value var] -> [Value var]
     goForCase _ []  _ _                         = []
 
     -- a : Y Δ' τ
-    goForCase recursor ((_, VNe t'):rst) (arg:args) extraArgs
+    goForCase recursor ((_, _, VNe t'):rst) (arg Seq.:<| args) extraArgs
       | elimHead (quoteNeutral t') == Var dataName
       -- Y ≡ X, recur
       = (foldl (@@) recursor extraArgs) @@ arg:goForCase recursor rst args extraArgs
@@ -228,7 +234,7 @@ makeRecursor name Data{..} =
       | otherwise = arg:goForCase recursor rst args extraArgs
 
     -- f : Π Ξ, Y Δ' τ
-    goForCase recursor ((_, ty@VPi{}):rst) (argf:args) extraArgs
+    goForCase recursor ((_, _, ty@VPi{}):rst) (argf Seq.:<| args) extraArgs
       -- Y ≡ X, build λ Ξ → recursor (f Ξ) (i.e., recursor . f, but polymorphic over a telescope)
       | Elim t <- t, elimHead t == Var dataName =
          makeFun recursor (fst (splitPi_pure ty)) argf:goForCase recursor rst args extraArgs
@@ -238,43 +244,45 @@ makeRecursor name Data{..} =
             t = quote ret
 
     -- Different thing (Set, etc), just pass it along
-    goForCase recursor ((_, _):rst) (arg:args) extraArgs = arg:goForCase recursor rst args extraArgs
+    goForCase recursor ((_, _, _):rst) (arg Seq.:<| args) extraArgs = arg:goForCase recursor rst args extraArgs
+
+    -- This case is impossible
+    goForCase _ _ _ _ = error "Type error in recursor"
 
 -- Given recursor, Ξ and f, build λ Ξ → recursor (f Ξ)
-makeFun :: Value var -> [(var, Value var)] -> Value var -> Value var
+makeFun :: (Show var, Eq var) => Value var -> [(var, c, Value var)] -> Value var -> Value var
 makeFun recursor []  x         = recursor @@ x
-makeFun recursor ((n, _):xs) f = VFn n $ \a -> makeFun recursor xs (f @@ a)
+makeFun recursor ((n, _, _):xs) f = VFn n $ \a -> makeFun recursor xs (f @@ a)
 
-getIxTele :: TypeCheck var m => Value var -> m ([(var, Term var)], Int)
+getIxTele :: TypeCheck var m => Value var -> m ([(var, Visibility, Term var)], Int)
 getIxTele kind = do
   (tele, i) <- splitPi kind
   case i of
-    VSet j -> pure (fmap quote <$> tele, j)
-    _ -> throwError (InvalidDataKind i)
+    VSet j -> pure (fmap (\(a, b, c) -> (a, b, quote c)) tele, j)
+    _ -> typeError (InvalidDataKind i)
 
-splitPi' :: Monad m => (var -> m var) -> Value var -> m ([(var, Value var)], Value var)
-splitPi' rename (VPi v domain rest) = do
+splitPi' :: Monad m => (var -> m var) -> Value var -> m ([(var, Visibility, Value var)], Value var)
+splitPi' rename (VPi v vis domain rest) = do
   v' <- rename v
-  first ((v', domain):) <$> splitPi' rename (rest (valueVar v'))
+  first ((v', vis, domain):) <$> splitPi' rename (rest (valueVar v'))
 splitPi' _ t = pure ([], t)
 
-splitPi :: TypeCheck var m => Value var -> m ([(var, Value var)], Value var)
+splitPi :: TypeCheck var m => Value var -> m ([(var, Visibility, Value var)], Value var)
 splitPi = splitPi' refresh
 
-splitPi_pure :: Value var -> ([(var, Value var)], Value var)
+splitPi_pure :: Value var -> ([(var, Visibility, Value var)], Value var)
 splitPi_pure = runIdentity . splitPi' pure
 
-quantify :: [(var, Term var)] -> Term var -> Term var
-quantify [] t          = t
-quantify ((v, t):qs) r = Pi v t (quantify qs r)
-
-appToTele :: Elim var -> [(var, b)] -> Elim var
+appToTele :: Elim var -> [(var, c, d)] -> Elim var
 appToTele x [] = x
-appToTele x ((v, _):xs) = appToTele (App x (Elim (Var v))) xs
+appToTele x ((v, _, _):xs) = appToTele (App x (Elim (Var v))) xs
 
 dropArgs :: Elim var -> Int -> (Elim var, [Term var])
 dropArgs x 0 = (x, [])
 dropArgs (App f t) n = second (t:) $ dropArgs f (n - 1)
+dropArgs x@Var{} _ = (x, [])
+dropArgs x@Meta{} _ = (x, [])
+dropArgs x@Cut{} _ = (x, [])
 
 elimHead :: Elim var -> Elim var
 elimHead (App f _) = elimHead f
