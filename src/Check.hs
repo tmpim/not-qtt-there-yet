@@ -40,6 +40,13 @@ checkRaw (P.Lam var body) term = do
       checkLoc body (range (valueVar var))
   pure (Lam var term)
 
+checkRaw (P.Pi var domain range) prop@(VNe NProp) = do
+  term <- checkLoc domain prop
+  domain <- evaluate term
+  assume var domain $ do
+    range <- checkLoc range prop
+    pure (Pi var Visible term range)
+
 checkRaw (P.Pi var domain range) i = do
   i <- isSet i
   term <- checkLoc domain (VSet i)
@@ -52,13 +59,20 @@ checkRaw P.Hole ty = do
   m <- freshMeta ty
   pure (quote m)
 
+checkRaw P.Prop (VNe NProp) = do
+  pure $ Elim Prop
+
+checkRaw P.Prop ty = do
+  _ <- isSet ty
+  pure $ Elim Prop
+
 checkRaw exp expected = do
   (term, ty) <- inferRaw exp
   subsumes ty expected
   pure (Elim term)
 
 inferLoc :: TypeCheck a m => P.ExprL a -> m (Elim a, Value a)
-inferLoc = flip withLocation inferRaw
+inferLoc ex = withLocation ex inferRaw
 
 inferRaw :: TypeCheck a m => P.Expr P.L a -> m (Elim a, Value a)
 inferRaw (P.Var a) = do
@@ -86,6 +100,7 @@ inferRaw P.Hole = do
   pure (quoteNeutral tm, ty)
 
 inferRaw (P.Set i) = pure (Cut (Set i) (Set (i + 1)), VSet (i + 1))
+inferRaw P.Prop = pure (Prop, VSet 1)
 
 inferRaw e = do
   x <- freshMeta (VSet maxBound)
@@ -106,10 +121,13 @@ checkDeclRaw :: TypeCheck var m => P.Decl P.L var -> m (m b -> m b)
 checkDeclRaw (P.TypeSig var ty) = do
   c <- checkLoc ty (VSet maxBound)
   nf_c <- evaluate c
-  pure (assume var nf_c . local (\x -> x { unproven = Map.insert var (P.L () (P.lRange ty)) (unproven x), toplevel = Set.insert var (toplevel x) }))
+  pure ( assume var nf_c
+       . local (\x -> x { unproven = Map.insert var (P.L () (P.lRange ty)) (unproven x)
+                        , toplevel = Set.insert var (toplevel x) }))
 
 checkDeclRaw (P.Value var dec) = do
-  let prove x = x { unproven = Map.delete var (unproven x), toplevel = Set.insert var (toplevel x) }
+  let prove x = x { unproven = Map.delete var (unproven x)
+                  , toplevel = Set.insert var (toplevel x) }
   ty <- lookupType var
   case ty of
     Just sig -> do
@@ -131,19 +149,35 @@ checkDeclRaw (P.DataDecl name eliminator dataParams dataKind constructors) = do
   (sorts, the_data) <- assuming params $ do
     kind <- checkLoc dataKind (VSet maxBound)
     kind_nf <- evaluate kind
-    l <- withLocation dataKind $ \_ -> isSet (snd (splitPi_pure kind_nf))
+    l <-
+      case kind_nf of
+        -- In case the return kind of the data type is Prop,
+        -- any sort is allowed in the parameters.
+        -- This does not cause inconsistency because Prop can
+        -- only be eliminated into Prop.
+        VNe NProp -> pure Nothing
+        -- Otherwise, get a valid level.
+        _ -> fmap Just . withLocation dataKind $ \_ -> isSet (snd (splitPi_pure kind_nf))
     closed <- evaluate (quantify (param_pi_tel Visible) kind)
     
     -- now that we know the level of the data type we need to go back and check all of the parameters
     -- ... again ...
-    _ <- checkTelescope dataParams . flip withLocation $ \(name, sort) -> do
-      sort <- checkLoc sort (VSet (succ l))
-      sort_nf <- evaluate sort
-      pure (name, sort_nf)
+    _ <- case l of
+      Just l ->
+        checkTelescope dataParams . flip withLocation $ \(name, sort) -> do
+          sort <- checkLoc sort (VSet (succ l))
+          sort_nf <- evaluate sort
+          pure (name, sort_nf)
+      Nothing -> pure []
 
     constrs <- assume name closed $ do
       for constructors . flip withLocation $ \(name, sort) -> do
-        sort <- checkLoc sort (VSet l)
+        sort <- case l of
+          -- When eliminating into Type_l: ensure that size restrictions are
+          -- respected
+          Just l  -> checkLoc sort (VSet l)
+          -- When eliminating into Prop: size issues don't matter
+          Nothing -> checkLoc sort (VSet maxBound)
         sort_nf <- evaluate sort
         pure (name, sort, sort_nf)
     

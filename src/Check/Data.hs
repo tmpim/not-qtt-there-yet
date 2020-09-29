@@ -30,22 +30,24 @@ and its definition is entirely implied by its type.)
 -}
 module Check.Data where
 
-
 import Control.Monad.Identity ( Identity(runIdentity) )
+import Control.Monad.Except (catchError, MonadError(throwError))
 import Control.Arrow
 
+import qualified Data.Map.Strict as Map
+import qualified Data.Sequence as Seq
+import Data.Sequence (Seq)
 import Data.Traversable
+import Data.Foldable
 
 import Check.Subsumes
 import Check.TypeError
 import Check.Fresh
 import Check.Monad
 
+import Qtt.Environment
 import Qtt.Evaluate
 import Qtt
-import qualified Data.Map.Strict as Map
-import Data.Sequence (Seq)
-import qualified Data.Sequence as Seq
 
 data Data var =
   Data { dataName :: var
@@ -78,22 +80,28 @@ makeInductionPrinciple Data{..} =
         args_tele :: [(var, Visibility, Term var)]
         args_tele   = map (\(a, b) -> (a, Visible, b)) args_quoted
 
+    dataSort <- evaluate (quantify args_tele (quote dataKind))
+
     motive <- freshWithHint "P"
     the_datum <- freshWithHint ("t" ++ show dataName)
 
-    (ixes, level) <- getIxTele dataKind
-    let sort = Set level
+    (ixes, sort) <- getIxTele dataKind
     let datum = appToTele (Var dataName) (args_tele ++ ixes)
         datum :: Elim var
 
-    let motiveSort = quantify ixes $ Pi the_datum Visible (Elim datum) sort
+    let motiveSort = quantify ixes $ Pi the_datum Visible (Elim datum) (quote sort)
     let motiveT :: (var, Visibility, Term var)
         motiveT = (motive, Visible, motiveSort)
 
-    let check = mkCheck (length ixes) (appToTele (Var dataName) args_tele)
+    let check = assume dataName dataSort
+              . mkCheck (length ixes) (appToTele (Var dataName) args_tele)
     cases <- traverse (makeConCase (length ixes) check motive) dataCons
 
-    evaluate (quantify (map invisCloak args_tele ++ map invisCloak ixes ++ [motiveT] ++ cases ++ [(the_datum, Visible, Elim datum)])
+    evaluate (quantify (map invisCloak args_tele
+                     ++ map invisCloak ixes
+                     ++ [motiveT]
+                     ++ cases
+                     ++ [(the_datum, Visible, Elim datum)])
                 (Elim (appToTele (Var motive) (ixes ++ [(the_datum, Visible, Elim datum)]))))
   where
     getProp motive ixes = foldl App (Var motive) ixes
@@ -110,7 +118,12 @@ makeInductionPrinciple Data{..} =
           tele' = fmap (\(a, b, c) -> (a, b, quote c)) tele
 
       ixes <- checkKind (quote ret)
-      inductiveArgs <- for (getInductives ixC tele) $ \(v, ixes, q, thing) -> do
+      inductives <- getInductives ixC tele
+        `catchError` \x ->
+          case x of
+            (NonWellFounded _ x r, l) -> throwError (NonWellFounded con x r, l)
+            e -> throwError e
+      inductiveArgs <- for inductives $ \(v, ixes, q, thing) -> do
         newv <- refresh v
         pure (newv, Visible, q $ Elim (App (getProp motive ixes) (Elim thing)))
 
@@ -128,14 +141,14 @@ makeInductionPrinciple Data{..} =
     mkCheck _ w h = typeError (WrongDataReturn w h)
 
     -- Build the induction cases.
-    getInductives :: Int -> [(var, Visibility, Value var)] -> [(var, [Term var], Term var -> Term var, Elim var)]
-    getInductives _ [] = []
+    getInductives :: Int -> [(var, Visibility, Value var)] -> m [(var, [Term var], Term var -> Term var, Elim var)]
+    getInductives _ [] = pure []
 
     -- x : Y Ξ τs:
     getInductives ixC ((v, _, VNe t'):rst)
       | elimHead t == Var dataName =      -- Y ≡ X. Strictly speaking we should check the indices line up here
           let (_, here_ixes) = dropArgs t ixC
-           in (v, here_ixes, id, Var v):getInductives ixC rst
+           in ((v, here_ixes, id, Var v):) <$> getInductives ixC rst
       | otherwise = getInductives ixC rst -- ¬(Y ≡ X); This variable doesn't get induced over
       where t = quoteNeutral t'
 
@@ -144,9 +157,15 @@ makeInductionPrinciple Data{..} =
       -- Where Y ≡ X,
       -- build an induction hypothesis of the form 
       -- Π Δ', P (f Δ')
-      | Elim t <- t, elimHead t == Var dataName =
-          let (_, here_ixes) = dropArgs t ixC
-           in (v, here_ixes, quantify (fmap (\(a, b, c) -> (a, b, quote c)) tele), appToTele (Var v) tele):getInductives ixC rst
+      | Elim t <- t, elimHead t == Var dataName = do
+        -- if X appears (saturated) in Δ, we should reject it..
+        for_ (zip [1..] (fst (splitPi_pure ty))) $ \(i, (_, _, t)) ->
+          case t of
+            VNe n | elimHead (quoteNeutral n) == Var dataName ->
+              typeError (NonWellFounded (error "empty NonWellFounded variable (getInductives outside of mkConCase?)") i t)
+            _ -> pure ()
+        let (_, here_ixes) = dropArgs t ixC
+          in ((v, here_ixes, quantify (fmap (\(a, b, c) -> (a, b, quote c)) tele), appToTele (Var v) tele):) <$> getInductives ixC rst
 
       -- Some other function type. Ignore it
       | otherwise = getInductives ixC rst
@@ -254,11 +273,13 @@ makeFun :: (Show var, Eq var) => Value var -> [(var, c, Value var)] -> Value var
 makeFun recursor []  x         = recursor @@ x
 makeFun recursor ((n, _, _):xs) f = VFn n $ \a -> makeFun recursor xs (f @@ a)
 
-getIxTele :: TypeCheck var m => Value var -> m ([(var, Visibility, Term var)], Int)
+getIxTele :: TypeCheck var m => Value var -> m ([(var, Visibility, Term var)], Value var)
 getIxTele kind = do
   (tele, i) <- splitPi kind
+  let l = fmap (\(a, b, c) -> (a, b, quote c)) tele
   case i of
-    VSet j -> pure (fmap (\(a, b, c) -> (a, b, quote c)) tele, j)
+    VSet j -> pure (l, VSet j)
+    VNe NProp -> pure (l, VNe NProp)
     _ -> typeError (InvalidDataKind i)
 
 splitPi' :: Monad m => (var -> m var) -> Value var -> m ([(var, Visibility, Value var)], Value var)

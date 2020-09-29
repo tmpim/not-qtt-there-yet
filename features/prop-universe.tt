@@ -1,0 +1,51 @@
+data (axJ) Id (A : Type₁) (x : A) : (y : A) → Type₁ where
+  refl : Id A x x
+
+-- Prop is impredicative...
+true : Prop
+true = (A : Prop) -> (x : A) -> A
+
+-- Not all elements of Prop are equal...
+--
+-- propNotEquals : (A : Prop) (B : Prop) -> Id Prop A B
+-- propNotEquals A B = refl {Prop} {A}
+-- 
+-- This errors with:
+--
+-- Types A and B are not equal.
+--     | 
+--  11 | propNotEquals A B = refl {Prop} {A}
+--     |                     ~~~~~~~~~~~~~~
+
+-- But all elements of a particular A ∈ Prop are!
+propAllEquals : (A : Prop) (x : A) (y : A) -> Id A x y
+propAllEquals A x y = refl {A} {x}
+
+-- We can define the proprositional truncation of a type A...
+data (unsquash) Squash (A : Type₀) : Prop where
+  intro : (x : A) → Squash A
+
+-- like bool
+data (if) Bool : Type₀ where
+  true  : Bool
+  false : Bool
+
+-- this is an instance of propAllEquals, oh well
+propEquals : Id (Squash Bool) (intro true) (intro false)
+propEquals = refl {_} {intro true}
+
+-- We can't get the bool out:
+--
+-- unsquashB : (s : Squash Bool) -> Bool
+-- unsquashB = unsquash (λ b -> Bool) (λ x -> x)
+--
+-- Why? Can only eliminate into Prop.
+-- unsquash : {A : Type₀} (P : Squash A -> Prop)
+--                                         ^^^^
+--            ((x : A) -> P (intro x))
+--            (tSquash : Squash A)
+--         -> P tSquash
+
+-- the parser errors without this def
+-- (lol)
+data (absurd) bottom : Type₀ where

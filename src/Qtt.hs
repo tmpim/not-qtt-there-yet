@@ -37,6 +37,7 @@ data Elim a
   | Meta (Meta a)
   | App (Elim a) (Term a)
   | Cut (Term a) (Term a)
+  | Prop
   deriving (Eq, Ord)
 
 data Meta a
@@ -71,6 +72,7 @@ data Neutral var
   = NVar var
   | NMeta (Qtt.Meta var)
   | NApp (Neutral var) (Seq (Value var))
+  | NProp
   deriving (Eq)
 
 instance (Show var, Eq var) => Show (Neutral var) where
@@ -89,6 +91,7 @@ quoteNeutral :: Neutral var -> Qtt.Elim var
 quoteNeutral (NVar v) = Qtt.Var v
 quoteNeutral (NMeta v) = Qtt.Meta v
 quoteNeutral (NApp f x) = foldl Qtt.App (quoteNeutral f) (fmap quote x)
+quoteNeutral NProp = Qtt.Prop
 
 quote :: Value var -> Qtt.Term var
 quote (VFn var b) = Qtt.Lam var (quote (b (valueVar var)))
@@ -110,6 +113,7 @@ isVarAlive var (Elim c) = go c where
   go (Var var') = var == var'
   go (App e c) = go e || isVarAlive var c
   go Meta{} = False
+  go Prop{} = False
   go (Cut a b) = isVarAlive var a || isVarAlive var b
 isVarAlive _ Set{} = False
 isVarAlive var (Lam v b) = v /= var && isVarAlive var b
@@ -138,6 +142,7 @@ instance (Eq a, Show a) => Show (Term a) where
 instance (Eq a, Show a) => Show (Elim a) where
   showsPrec _ (Var x) = shows x
   showsPrec _ (Meta v) = shows v
+  showsPrec _ Prop = showString "Prop"
   showsPrec _ (Cut a b) = showChar '(' . showsPrec 1 a . showString " : " . shows b . showChar ')'
   showsPrec prec x =
       showParen (prec >= 2) $

@@ -73,6 +73,24 @@ getUnsolvedMetas = do
       Nothing -> mempty
       Just set -> set
 
+elimType :: TypeCheck var m
+         => Neutral var
+         -> m (Value var)
+elimType (NVar v) = do
+  t <- lookupType v
+  case t of
+    Nothing -> typeError (NotInScope v)
+    Just t -> pure $ t
+elimType (NMeta mv) = pure (metaExpected mv)
+elimType (NApp f xs) = do
+  kind <- elimType f
+  let go (VPi v Invisible _ r) as     = go (r (valueVar v)) as
+      go (VPi _ _ _ r) (a Seq.:<| xs) = go (r a) xs
+      go t Seq.Empty                  = t
+      go a b = error (show (a, b))
+  pure $ go kind xs
+elimType NProp = pure $ VSet 1
+
 typeError :: TypeCheck var m => TypeError var -> m b
 typeError e = do
   c <- asks locationStack

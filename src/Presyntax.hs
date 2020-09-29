@@ -14,6 +14,7 @@ data Expr f a
   | Cut (f (Expr f a)) (f (Expr f a))
   | Pi a (f (Expr f a)) (f (Expr f a))
   | Set Int
+  | Prop
   | Hole
 
 deriving instance (forall a. Show a => Show (f a), Show a) => Show (Expr f a)

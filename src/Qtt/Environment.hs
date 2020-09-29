@@ -19,7 +19,7 @@ import Data.Range
 
 import Presyntax (L(..))
 
-import Qtt (Meta, Value)
+import Qtt
 
 data Env a =
   Env { assumptions   :: Map a (Value a)

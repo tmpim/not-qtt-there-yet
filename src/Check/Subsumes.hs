@@ -1,5 +1,6 @@
-{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RecordWildCards #-}
 module Check.Subsumes where
 
 import Control.Monad.IO.Class
@@ -19,55 +20,111 @@ import qualified Data.Sequence as Seq
 import Data.Foldable (for_)
 
 import Check.Fresh
-import Control.Monad (zipWithM_)
 import Control.Monad.Except (throwError, MonadError(catchError))
 import Control.Monad.Reader (asks)
 
 import Data.Sequence (Seq)
-import Data.Foldable (Foldable(toList))
 
-subsumes :: TypeCheck a m => Value a -> Value a -> m ()
--- subsumes a b | trace (show a ++ " ≤? " ++ show b) False = undefined
-subsumes (VNe (NApp (NMeta m) spine)) term = solve m spine term
-subsumes term (VNe (NApp (NMeta m) spine)) = solve m spine term
-subsumes (VNe a) (VNe b) = subsumesNe a b
-subsumes (VPi _ vis domain range) (VPi _ vis' domain' range') | vis == vis' = do
-  v <- freshWithHint "$pi"
-  subsumes domain' domain
-  subsumes (range (valueVar v)) (range' (valueVar v))
-subsumes (VFn a b) t = subsumes (b (valueVar a)) (t @@ valueVar a)
-subsumes t (VFn a b) = subsumes (t @@ valueVar a) (b (valueVar a))
+subsumes :: TypeCheck a m
+         => Value a
+         -> Value a
+         -> m (Value a -> Value a)
+
+subsumes a b | a == b = pure id
+
+subsumes (VNe a) val
+  | Just (meta, spine) <- isMeta a = solve meta spine val
+
+subsumes val (VNe a)
+  | Just (meta, spine) <- isMeta a = solve meta spine val
+
+subsumes (VPi _ vis dom rng) (VPi _ vis' dom' rng') | vis == vis' = do
+  liftIO . print $ (dom', dom)
+  coe <- subsumes dom' dom
+  var <- fresh
+  assume var dom $ do
+    let cast = coe (valueVar var)
+    rng <- subsumes (rng cast) (rng' (valueVar var))
+    pure (\vl -> VFn var (\b -> rng (vl @@ (coe b))))
+
+-- λx. e ≡ g → e ≡ g x
+subsumes (VFn var k) b =
+  subsumes (k (valueVar var)) (b @@ valueVar var)
+
+subsumes (VNe a) (VNe b) = do
+  t <- elimType a
+  subsumesNe t a b
+
+subsumes (VNe NProp) (VSet j)
+  | j >= 1 = pure id
+
 subsumes (VSet i) (VSet j)
-  | i <= j = pure ()
-subsumes a b = do
-  a <- zonk a
-  b <- zonk b
-  typeError (NotEqual a b)
+  | i <= j = pure id
 
-subsumesNe :: TypeCheck a m => Neutral a -> Neutral a -> m ()
-subsumesNe (NVar a) (NVar b)
-  | a == b = pure ()
-  | otherwise = typeError (NotEqual (valueVar a) (valueVar b))
-subsumesNe (NApp (NVar h) b) (NApp (NVar h') b') | h == h' = do
-  zipWithM_ subsumes (toList b) (toList b')
+subsumes a b = typeError (NotEqual a b)
 
-subsumesNe (NApp (NMeta m) spine) term = solve m spine (VNe term)
+isMeta :: Neutral a -> Maybe (Meta a, Seq (Value a))
+isMeta (NMeta m) = pure (m, Seq.empty)
+isMeta (NApp (NMeta m) t) = pure (m, t)
+isMeta _ = Nothing
 
-subsumesNe (NMeta m) term = solve m mempty (VNe term)
+sortOfKind :: forall a m. TypeCheck a m => Value a -> m (Value a)
+sortOfKind (VFn _ _) = pure (VSet 0)
+sortOfKind (VPi v _ d r) = do
+  d <- sortOfKind d
+  r <- sortOfKind (r (valueVar v))
+  liftIO $ print (d, r)
+  case (d, r) of
+    (VNe NProp, _) -> pure (VNe NProp)
+    (_, VNe NProp) -> pure (VNe NProp)
+    (VSet a, VSet b) -> pure (VSet (max a b))
+sortOfKind (VSet i) = pure (VSet (i + 1))
+sortOfKind (VNe a) =
+  case a of
+    NVar t -> do
+      ty <- lookupType t
+      case ty of
+        Just k -> pure k
+        Nothing -> typeError (NotInScope t)
+    NMeta t -> sortOfKind (metaExpected t)
+    NProp -> pure (VSet 1)
+    NApp v t -> elimType (NApp v t)
 
-subsumesNe term (NApp (NMeta m) spine) = solve m spine (VNe term)
+subsumesNe :: forall a m. TypeCheck a m
+           => Value a
+           -> Neutral a
+           -> Neutral a
+           -> m (Value a -> Value a)
+subsumesNe kind a b =
+  do
+    sort <- sortOfKind kind
+    case sort of
+      -- All values in types in Prop are equal
+      VNe NProp -> pure id
+      _ -> go a b
+  where
+    go (NVar a) (NVar b) | a == b = pure id
+    go (NApp h t) (NApp h' t') | h == h', length t == length t' = do
+      hKind <- elimType h
+      id <$ subsumesTelescope hKind t t'
+    go x y = typeError (NotEqual (VNe x) (VNe y))
 
-subsumesNe term (NMeta m) = solve m mempty (VNe term)
+    subsumesTelescope :: Value a -> Seq (Value a) -> Seq (Value a) -> m ()
+    subsumesTelescope _ Seq.Empty Seq.Empty = pure ()
+    subsumesTelescope (VPi var _ dom range) (a Seq.:<| as) (b Seq.:<| bs) = do
+      subsumes a b
+      new <- refresh var
+      assume new dom $
+        subsumesTelescope (range (valueVar new)) as bs
 
-subsumesNe a b = do
-  a <- zonk (VNe a)
-  b <- zonk (VNe b)
-  typeError (NotEqual a b)
-
-solve :: TypeCheck a m => Meta a -> Seq (Value a) -> Value a -> m ()
+solve :: TypeCheck a m
+      => Meta a
+      -> Seq (Value a)
+      -> Value a
+      -> m (Value a -> Value a)
 solve meta@MV{..} spine val
-  | Just MV{..} <- metaHeaded val = do
-      liftIO . modifyMVar_ metaBlockedEqns $ \queue ->
+  | Just MV{..} <- metaHeaded val =
+      fmap (const id) . liftIO . modifyMVar_ metaBlockedEqns $ \queue ->
         pure (queue Seq.:|> Equation meta spine val)
   | Just vars <- isPattern spine =
       do
@@ -79,18 +136,18 @@ solve meta@MV{..} spine val
         case x of
           Nothing -> do
             solveMeta meta
-            liftIO . putStrLn $ "Solving " ++ show meta ++ " := " ++ show (fakeLam)
             liftIO $ putMVar metaSlot (quote fakeLam)
             t <- liftIO $ swapMVar metaBlockedEqns mempty
             for_ t $ \(Equation meta spine val) -> do
               solve meta spine val
+            pure id
           Just t -> do
             tv <- evaluate t
             subsumes (foldl (@@) tv spine) =<< evaluate (quote (foldl (@@) fakeLam spine))
       `catchError` \(_, r) -> do
         m <- zonk (VNe (NMeta meta))
         throwError ((NotEqual m val), r)
-  | otherwise = defer meta spine val
+  | otherwise = id <$ defer meta spine val
 
 metaHeaded :: Value a -> Maybe (Meta a)
 metaHeaded (VNe (NApp (NMeta m) _)) = Just m

@@ -29,6 +29,7 @@ evaluateArrow = evaluate
 evaluateNeutral :: (MonadReader (Env a) m, Ord a, Show a) => Elim a -> m (Value a)
 evaluateNeutral (Meta mv) = pure (VNe (NMeta mv))
 evaluateNeutral (Cut a _) = evaluate a
+evaluateNeutral Prop    = pure (VNe NProp)
 evaluateNeutral (Var v) = do
   c <- lookupValue v
   case c of
@@ -60,6 +61,7 @@ zonk (VNe n) = zonkNeutral n where
     ts <- traverse zonk ts
     pure (foldl (@@) t ts)
   zonkNeutral (NVar v) = pure (VNe (NVar v))
+  zonkNeutral NProp = pure (VNe NProp)
 zonk (VPi var vis d r) = do
   VPi var vis <$> zonk d <*> pure (\arg -> unsafeZonkDomain (r arg))
 zonk x = pure x

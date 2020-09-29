@@ -36,6 +36,7 @@ set =
 
 atom, expr, expr0 :: Parser (ExprL Var)
 atom = loc (Set <$> set)
+   <|> loc (Prop <$ symbol "Prop")
    <|> loc (Var <$> var)
    <|> loc (Hole <$ symbol "_")
    <|> parens expr
@@ -75,7 +76,7 @@ expr =
     app head [] = head
     app head ((vis, a):rest) = app (L (App vis head a) (lRange head <> lRange a)) rest
 
-    applied = ((,) True <$> braces expr0) <|> ((,) False <$> expr0)
+    applied = ((,) True <$> braces expr) <|> ((,) False <$> expr0)
 
 decl :: Parser (L (Decl L Var))
 decl =
