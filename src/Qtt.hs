@@ -19,18 +19,23 @@ data Visibility = Visible | Invisible
 
 data Term a
   = Set Int
-  | Pi { var          :: a
-       , visbility    :: Visibility
-       , domain       :: Term a
-       , range        :: Term a
+  | Pi { piBinder :: Binder Term a
+       , range    :: Term a
        }
   | Lam a (Term a)
   | Elim  (Elim a)
   deriving (Eq, Ord)
 
-quantify :: [(var, Visibility, Term var)] -> Term var -> Term var
-quantify [] t          = t
-quantify ((v, vis, t):qs) r = Pi v vis t (quantify qs r)
+data Binder t a =
+  Binder { var        :: a
+         , visibility :: Visibility
+         , domain     :: t a
+         }
+  deriving (Eq, Ord)
+
+quantify :: [Binder Term var] -> Term var -> Term var
+quantify [] t     = t
+quantify (b:qs) r = Pi b (quantify qs r)
 
 data Elim a
   = Var a
@@ -96,7 +101,7 @@ quoteNeutral NProp = Qtt.Prop
 quote :: Value var -> Qtt.Term var
 quote (VFn var b) = Qtt.Lam var (quote (b (valueVar var)))
 quote (VPi var vis dom range) =
-  Qtt.Pi var vis (quote dom) (quote (range (valueVar var)))
+  Qtt.Pi (Binder var vis (quote dom)) (quote (range (valueVar var)))
 quote (VSet i) = Qtt.Set i
 quote (VNe v) = Qtt.Elim (quoteNeutral v)
 
@@ -117,7 +122,7 @@ isVarAlive var (Elim c) = go c where
   go (Cut a b) = isVarAlive var a || isVarAlive var b
 isVarAlive _ Set{} = False
 isVarAlive var (Lam v b) = v /= var && isVarAlive var b
-isVarAlive var (Pi v _ d r) = isVarAlive var d || (v /= var && isVarAlive var r)
+isVarAlive var (Pi (Binder v _ d) r) = isVarAlive var d || (v /= var && isVarAlive var r)
 
 instance (Eq a, Show a) => Show (Term a) where
   showsPrec prec ex =
@@ -125,7 +130,7 @@ instance (Eq a, Show a) => Show (Term a) where
       Lam x p ->
         showParen (prec >= 1) $
           showChar 'λ' . shows x . showString ". " . showsPrec 0 p
-      Pi var vis d r
+      Pi (Binder var vis d) r
         | isVarAlive var r ->
           showParen (prec >= 1) $
             showBracket vis

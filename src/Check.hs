@@ -45,7 +45,7 @@ checkRaw (P.Pi var domain range) prop@(VNe NProp) = do
   domain <- evaluate term
   assume var domain $ do
     range <- checkLoc range prop
-    pure (Pi var Visible term range)
+    pure (Pi (Binder var Visible term) range)
 
 checkRaw (P.Pi var domain range) i = do
   i <- isSet i
@@ -53,7 +53,7 @@ checkRaw (P.Pi var domain range) i = do
   domain <- evaluate term
   assume var domain $ do
     range <- checkLoc range (VSet i)
-    pure (Pi var Visible term range)
+    pure (Pi (Binder var Visible term) range)
 
 checkRaw P.Hole ty = do
   m <- freshMeta ty
@@ -144,7 +144,7 @@ checkDeclRaw (P.DataDecl name eliminator dataParams dataKind constructors) = do
     sort <- checkLoc sort (VSet maxBound)
     sort_nf <- evaluate sort
     pure (name, sort_nf)
-  let param_pi_tel v = fmap (\(a, b) -> (a, v, quote b)) params
+  let param_pi_tel v = fmap (\(a, b) -> Binder a v (quote b)) params
 
   (sorts, the_data) <- assuming params $ do
     kind <- checkLoc dataKind (VSet maxBound)

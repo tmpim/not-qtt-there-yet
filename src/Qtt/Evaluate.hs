@@ -17,7 +17,7 @@ evaluate (Elim a) = evaluateNeutral a
 evaluate (Lam a b) = do
   env <- ask
   pure (VFn a (\arg -> evaluateArrow b (insertDecl a arg env)))
-evaluate (Pi var vis a b) = do
+evaluate (Pi (Binder var vis a) b) = do
   env <- ask
   a <- evaluate a
   pure (VPi var vis a (\arg -> evaluateArrow b (insertDecl var arg env)))

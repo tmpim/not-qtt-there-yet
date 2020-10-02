@@ -169,7 +169,7 @@ checkScope set (Elim a) = go a where
     checkScope set a
     checkScope set b
   go Meta{} = pure ()
-checkScope set (Pi var _vis domain range) = do
+checkScope set (Pi (Binder var _vis domain) range) = do
   checkScope set domain
   checkScope (Set.insert var set) range
 checkScope set (Lam var body) = checkScope (Set.insert var set) body
