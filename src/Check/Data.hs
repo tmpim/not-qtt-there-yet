@@ -48,6 +48,7 @@ import Check.Monad
 import Qtt.Environment
 import Qtt.Evaluate
 import Qtt
+import Debug.Trace (traceShow, traceShowId)
 
 data Data var =
   Data { dataName :: var
@@ -213,22 +214,24 @@ makeRecursor name Data{..} =
     -- Compute:
     --   A function which accumulates `length arg` arguments, splits on the last of these,
     --   and eliminates the data type X Δ.
-    makeRecursor :: Map.Map var (Int, Seq (Value var) -> [Value var] -> [Value var]) -> [Value var] -> (Int, Int) -> [var] -> Value var
-    makeRecursor cases acc (nArgs, nIndices) [] =
+    makeRecursor :: Map.Map var (Int, Seq (Value var) -> [Value var] -> Seq (Value var)) -> [Value var] -> (Int, Int) -> [var] -> Value var
+    makeRecursor cases acc (nArgs, nIndices) [] = traceShow ("static", static) $
       case acc of
         head:_ | Just ((i, worker), cArgs) <- isCon cases head ->
-          foldl (@@) (args !! (skip + i)) (worker cArgs (take nIndices (drop nArgs acc)))
+          foldl (@@) (args !! (skip + i)) (traceShowId (cArgs <> worker cArgs static) :: Seq (Value var))
         _ -> (foldl (@@) (valueVar name) (reverse acc))
       where
         args = reverse acc
         skip = nArgs + nIndices + 1
+        static = take (1 + nIndices + length cases) (drop nArgs args)
     makeRecursor cases acc skip (n:rest) = VFn n (\v -> makeRecursor cases (v:acc) skip rest)
 
     -- Is the given value a neutral application of a constructor of this data type?
-    isCon :: Map.Map var (Int, Seq (Value var) -> [Value var] -> [Value var])
+    isCon :: Map.Map var (Int, Seq (Value var) -> [Value var] -> Seq (Value var))
           -> Value var
-          -> Maybe ((Int, Seq (Value var) -> [Value var] -> [Value var]), Seq (Value var))
+          -> Maybe ((Int, Seq (Value var) -> [Value var] -> Seq (Value var)), Seq (Value var))
     isCon cases (VNe (NApp (NVar x) args)) = flip (,) args <$> Map.lookup x cases
+    isCon cases (VNe (NVar x)) = flip (,) mempty <$> Map.lookup x cases
     isCon _ _ = Nothing
 
     -- Build the individual eliminator for each case, given:
@@ -241,29 +244,29 @@ makeRecursor name Data{..} =
     --
     -- Computes: The arguments to this data type, with recursive
     -- occurences eliminated (even under lambda).
-    goForCase :: Value var -> [(var, c, Value var)] -> Seq (Value var) -> [Value var] -> [Value var]
-    goForCase _ []  _ _                         = []
+    goForCase :: Value var -> [(var, c, Value var)] -> Seq (Value var) -> [Value var] -> Seq (Value var)
+    goForCase _ []  _ _                         = mempty
 
     -- a : Y Δ' τ
     goForCase recursor ((_, _, VNe t'):rst) (arg Seq.:<| args) extraArgs
       | elimHead (quoteNeutral t') == Var dataName
       -- Y ≡ X, recur
-      = (foldl (@@) recursor extraArgs) @@ arg:goForCase recursor rst args extraArgs
-      -- ← (Y ≡ X), pass along
-      | otherwise = arg:goForCase recursor rst args extraArgs
+      = (foldl (@@) recursor extraArgs) @@ arg Seq.:<| goForCase recursor rst args extraArgs
+      -- ← (Y ≡ X), ignore
+      | otherwise = goForCase recursor rst args extraArgs
 
     -- f : Π Ξ, Y Δ' τ
     goForCase recursor ((_, _, ty@VPi{}):rst) (argf Seq.:<| args) extraArgs
       -- Y ≡ X, build λ Ξ → recursor (f Ξ) (i.e., recursor . f, but polymorphic over a telescope)
       | Elim t <- t, elimHead t == Var dataName =
-         makeFun recursor (fst (splitPi_pure ty)) argf:goForCase recursor rst args extraArgs
+         makeFun recursor (fst (splitPi_pure ty)) argf Seq.:<| goForCase recursor rst args extraArgs
       -- ¬ (Y ≡ X), pass along
-      | otherwise = argf:goForCase recursor rst args extraArgs
+      | otherwise = goForCase recursor rst args extraArgs
       where (_, ret) = splitPi_pure ty
             t = quote ret
 
     -- Different thing (Set, etc), just pass it along
-    goForCase recursor ((_, _, _):rst) (arg Seq.:<| args) extraArgs = arg:goForCase recursor rst args extraArgs
+    goForCase recursor ((_, _, _):rst) (_ Seq.:<| args) extraArgs = goForCase recursor rst args extraArgs
 
     -- This case is impossible
     goForCase _ _ _ _ = error "Type error in recursor"

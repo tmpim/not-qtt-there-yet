@@ -116,6 +116,9 @@ subsumesNe kind a b =
       new <- refresh var
       assume new dom $
         subsumesTelescope (range (valueVar new)) as bs
+    subsumesTelescope t (a Seq.:<| as) (b Seq.:<| bs) = do
+      subsumes a b
+      subsumesTelescope t as bs
 
 solve :: TypeCheck a m
       => Meta a

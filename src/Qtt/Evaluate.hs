@@ -66,6 +66,6 @@ zonk (VPi var vis d r) = do
   VPi var vis <$> zonk d <*> pure (\arg -> unsafeZonkDomain (r arg))
 zonk x = pure x
 
--- What can I say but "Yikes".
+-- | What can I say but "Yikes".
 unsafeZonkDomain :: (Ord var, Show var) => Value var -> Value var
 unsafeZonkDomain v = unsafePerformIO (runReaderT (zonk v) =<< emptyEnv)

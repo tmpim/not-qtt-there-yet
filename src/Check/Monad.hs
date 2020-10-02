@@ -86,9 +86,9 @@ elimType (NApp f xs) = do
   kind <- elimType f
   let go (VPi v Invisible _ r) as     = go (r (valueVar v)) as
       go (VPi _ _ _ r) (a Seq.:<| xs) = go (r a) xs
-      go t Seq.Empty                  = t
-      go a b = error (show (a, b))
-  pure $ go kind xs
+      go t Seq.Empty                  = pure t
+      go a _ = typeError (NotPi a)
+  go kind xs
 elimType NProp = pure $ VSet 1
 
 typeError :: TypeCheck var m => TypeError var -> m b
