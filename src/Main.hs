@@ -96,17 +96,17 @@ prettify scope (VFn arg cont) =
        in if var `Set.member` scope
              then VFn (Intro new) (prettify (Set.insert new scope) . cont)
              else VFn (Intro var) (prettify (Set.insert var scope) . cont)
-prettify scope (VPi arg vis domain range) =
+prettify scope (VPi (Binder arg vis domain) range) =
   case arg of
     Refresh var _ ->
       if var `Set.member` scope
-        then VPi arg         vis (prettify mempty domain) (prettify scope . range)
-        else VPi (Intro var) vis (prettify mempty domain) (prettify (Set.insert var scope) . range)
+        then VPi (Binder arg         vis (prettify mempty domain)) (prettify scope . range)
+        else VPi (Binder (Intro var) vis (prettify mempty domain)) (prettify (Set.insert var scope) . range)
     Intro var ->
       let new = findFresh var scope
        in if var `Set.member` scope
-             then VPi (Intro new) vis (prettify mempty domain) (prettify (Set.insert new scope) . range)
-             else VPi (Intro var) vis (prettify mempty domain) (prettify (Set.insert var scope) . range)
+             then VPi (Binder (Intro new) vis (prettify mempty domain)) (prettify (Set.insert new scope) . range)
+             else VPi (Binder (Intro var) vis (prettify mempty domain)) (prettify (Set.insert var scope) . range)
 prettify _ x = x
 
 findFresh :: T.Text -> Set T.Text -> T.Text

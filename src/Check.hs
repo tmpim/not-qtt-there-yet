@@ -108,7 +108,7 @@ inferRaw e = do
   pure (Cut term (quote x), x)
 
 instantiate :: TypeCheck a m => Value a -> m (Seq (Value a), Value a)
-instantiate (VPi _var Invisible dom range) = do
+instantiate (VPi Binder{domain = dom} range) = do
   meta <- freshMeta dom
   (seq, r) <- instantiate (range meta)
   pure (seq Seq.:|> meta, r)
@@ -228,10 +228,10 @@ isPiType :: TypeCheck a m
               , Value a -> Value a
               , Elim a -> Elim a
               )
-isPiType _ _ (VPi _ Visible a b) = pure (a, b, id)
-isPiType True _ (VPi _ Invisible a b) = pure (a, b, id)
+isPiType _ _ (VPi Binder{visibility = Visible, domain = a} b)      = pure (a, b, id)
+isPiType True _ (VPi Binder{visibility = Invisible, domain = a} b) = pure (a, b, id)
 
-isPiType False hint (VPi _ Invisible dom rng) = do
+isPiType False hint (VPi Binder{visibility = Invisible, domain = dom } rng) = do
   meta <- freshMeta dom
   (domain, range, inner) <- isPiType False hint (rng meta)
   pure (domain, range, \x -> App (inner x) (quote meta))
@@ -245,7 +245,14 @@ isPiType over hint t = do
   domain <- freshMeta (VSet maxBound)
   assume name domain $ do
     range <- freshMeta (VSet maxBound)
-    subsumes t (VPi name (if over then Invisible else Visible) domain (const range))
+    let binder = Binder { var = name
+                        , domain = domain
+                        , visibility =
+                            if over
+                              then Invisible
+                              else Visible
+                        }
+    subsumes t (VPi binder (const range))
     pure (domain, const range, id)
 
 isSet :: TypeCheck a m => Value a -> m Int

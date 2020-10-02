@@ -84,9 +84,9 @@ elimType (NVar v) = do
 elimType (NMeta mv) = pure (metaExpected mv)
 elimType (NApp f xs) = do
   kind <- elimType f
-  let go (VPi v Invisible _ r) as     = go (r (valueVar v)) as
-      go (VPi _ _ _ r) (a Seq.:<| xs) = go (r a) xs
-      go t Seq.Empty                  = pure t
+  let go (VPi binder r) as        = go (r (valueVar (var binder))) as
+      go (VPi _ r) (a Seq.:<| xs) = go (r a) xs
+      go t Seq.Empty              = pure t
       go a _ = typeError (NotPi a)
   go kind xs
 elimType NProp = pure $ VSet 1

@@ -17,10 +17,10 @@ evaluate (Elim a) = evaluateNeutral a
 evaluate (Lam a b) = do
   env <- ask
   pure (VFn a (\arg -> evaluateArrow b (insertDecl a arg env)))
-evaluate (Pi (Binder var vis a) b) = do
+evaluate (Pi bind b) = do
   env <- ask
-  a <- evaluate a
-  pure (VPi var vis a (\arg -> evaluateArrow b (insertDecl var arg env)))
+  bind <- (\d -> bind { domain = d }) <$> evaluate (domain bind)
+  pure (VPi bind (\arg -> evaluateArrow b (insertDecl (var bind) arg env)))
 evaluate (Set i) = pure (VSet i)
 
 evaluateArrow :: (Ord a, Show a) => Term a -> Env a -> Value a
@@ -62,8 +62,9 @@ zonk (VNe n) = zonkNeutral n where
     pure (foldl (@@) t ts)
   zonkNeutral (NVar v) = pure (VNe (NVar v))
   zonkNeutral NProp = pure (VNe NProp)
-zonk (VPi var vis d r) = do
-  VPi var vis <$> zonk d <*> pure (\arg -> unsafeZonkDomain (r arg))
+zonk (VPi b r) = do
+  b <- fmap (\d -> b { domain = d }) $ zonk (domain b)
+  pure $ VPi b (\arg -> unsafeZonkDomain (r arg))
 zonk x = pure x
 
 -- | What can I say but "Yikes".

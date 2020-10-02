@@ -57,7 +57,7 @@ data Meta a
 data Value var
   = VNe (Neutral var)
   | VFn var (Value var -> Value var)
-  | VPi var Visibility (Value var) (Value var -> Value var)
+  | VPi (Binder Value var) (Value var -> Value var)
   | VSet Int
 
 instance (Eq var, Show var) => Show (Value var) where
@@ -66,10 +66,9 @@ instance (Eq var, Show var) => Show (Value var) where
 instance Eq var => Eq (Value var) where
   VNe a == VNe b = a == b
   VFn var body == VFn var' body' = body (valueVar var') == body' (valueVar var)
-  VPi var vis domain body == VPi var' vis' domain' body' =
-       domain == domain'
-    && vis == vis'
-    && body (valueVar var') == body' (valueVar var)
+  VPi binder body == VPi binder' body' =
+       binder == binder'
+    && body (valueVar (var binder)) == body' (valueVar (var binder'))
   VSet a == VSet b = a == b
   _ == _ = False
 
@@ -100,8 +99,8 @@ quoteNeutral NProp = Qtt.Prop
 
 quote :: Value var -> Qtt.Term var
 quote (VFn var b) = Qtt.Lam var (quote (b (valueVar var)))
-quote (VPi var vis dom range) =
-  Qtt.Pi (Binder var vis (quote dom)) (quote (range (valueVar var)))
+quote (VPi binder range) =
+  Qtt.Pi binder{ domain = quote (domain binder) } (quote (range (valueVar (var binder))))
 quote (VSet i) = Qtt.Set i
 quote (VNe v) = Qtt.Elim (quoteNeutral v)
 
@@ -122,7 +121,8 @@ isVarAlive var (Elim c) = go c where
   go (Cut a b) = isVarAlive var a || isVarAlive var b
 isVarAlive _ Set{} = False
 isVarAlive var (Lam v b) = v /= var && isVarAlive var b
-isVarAlive var (Pi (Binder v _ d) r) = isVarAlive var d || (v /= var && isVarAlive var r)
+isVarAlive var (Pi binder@Binder{var=v} r) =
+  isVarAlive var (domain binder) || (v /= var && isVarAlive var r)
 
 instance (Eq a, Show a) => Show (Term a) where
   showsPrec prec ex =

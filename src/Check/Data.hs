@@ -116,8 +116,8 @@ makeInductionPrinciple Data{..} =
     --    the constructor name, and the constructor's kind
     makeConCase ixC checkKind motive (con, kind) = do
       (tele, ret) <- splitPi kind
-      let con_appd = appToTele (Var con) (fmap (\(Binder a b c) -> Binder a b (quote c)) tele)
-          tele' = fmap (\(Binder a b c) -> (Binder a b (quote c))) tele
+      let con_appd = appToTele (Var con) (fmap (\b -> b { domain = quote (domain b) }) tele)
+          tele' = fmap (\b -> b { domain = quote (domain b)}) tele
 
       ixes <- checkKind (quote ret)
       inductives <- getInductives ixC tele
@@ -148,7 +148,7 @@ makeInductionPrinciple Data{..} =
     getInductives _ [] = pure []
 
     -- x : Y Ξ τs:
-    getInductives ixC ((Binder v _ (VNe t')):rst)
+    getInductives ixC (Binder{ var = v, domain = VNe t' }:rst)
       | elimHead t == Var dataName =      -- Y ≡ X. Strictly speaking we should check the indices line up here
           let (_, here_ixes) = dropArgs t ixC
            in ((v, here_ixes, id, Var v):) <$> getInductives ixC rst
@@ -156,7 +156,7 @@ makeInductionPrinciple Data{..} =
       where t = quoteNeutral t'
 
     -- f : Π Δ', Y Ξ τs
-    getInductives ixC ((Binder v _ ty@VPi{}):rst)
+    getInductives ixC (Binder{ var = v, domain = ty@VPi{}}:rst)
       -- Where Y ≡ X,
       -- build an induction hypothesis of the form 
       -- Π Δ', P (f Δ')
@@ -168,7 +168,11 @@ makeInductionPrinciple Data{..} =
               typeError (NonWellFounded (error "empty NonWellFounded variable (getInductives outside of mkConCase?)") i t)
             _ -> pure ()
         let (_, here_ixes) = dropArgs t ixC
-          in ((v, here_ixes, quantify (fmap (\(Binder a b c) -> (Binder a b (quote c))) tele), appToTele (Var v) tele):) <$> getInductives ixC rst
+          in (( v
+              , here_ixes
+              , quantify (fmap (\b -> b { domain = quote (domain b) }) tele)
+              , appToTele (Var v) tele):)
+             <$> getInductives ixC rst
 
       -- Some other function type. Ignore it
       | otherwise = getInductives ixC rst
@@ -179,7 +183,7 @@ makeInductionPrinciple Data{..} =
     getInductives ixC (_:rst) = getInductives ixC rst
 
 invisCloak :: Binder a var -> Binder a var
-invisCloak (Binder a _ b) = (Binder a Invisible b)
+invisCloak binder = binder { visibility = Visible }
 
 {-
 for a type like
@@ -281,16 +285,16 @@ makeFun recursor (Binder {var = n}:xs) f = VFn n $ \a -> makeFun recursor xs (f 
 getIxTele :: TypeCheck var m => Value var -> m ([Binder Term var], Value var)
 getIxTele kind = do
   (tele, i) <- splitPi kind
-  let l = fmap (\(Binder a b c) -> Binder a b (quote c)) tele
+  let l = fmap (\b -> b { domain = quote (domain b) }) tele
   case i of
     VSet j -> pure (l, VSet j)
     VNe NProp -> pure (l, VNe NProp)
     _ -> typeError (InvalidDataKind i)
 
 splitPi' :: Monad m => (var -> m var) -> Value var -> m ([Binder Value var], Value var)
-splitPi' rename (VPi v vis domain rest) = do
-  v' <- rename v
-  first ((Binder v' vis domain):) <$> splitPi' rename (rest (valueVar v'))
+splitPi' rename (VPi binder rest) = do
+  v' <- rename (var binder)
+  first (binder { var = v' }:) <$> splitPi' rename (rest (valueVar v'))
 splitPi' _ t = pure ([], t)
 
 splitPi :: TypeCheck var m => Value var -> m ([Binder Value var], Value var)

@@ -38,11 +38,10 @@ subsumes (VNe a) val
 subsumes val (VNe a)
   | Just (meta, spine) <- isMeta a = solve meta spine val
 
-subsumes (VPi _ vis dom rng) (VPi _ vis' dom' rng') | vis == vis' = do
-  liftIO . print $ (dom', dom)
-  coe <- subsumes dom' dom
+subsumes (VPi binder rng) (VPi binder' rng') | visibility binder == visibility binder' = do
+  coe <- subsumes (domain binder) (domain binder')
   var <- fresh
-  assume var dom $ do
+  assume var (domain binder) $ do
     let cast = coe (valueVar var)
     rng <- subsumes (rng cast) (rng' (valueVar var))
     pure (\vl -> VFn var (\b -> rng (vl @@ (coe b))))
@@ -70,9 +69,9 @@ isMeta _ = Nothing
 
 sortOfKind :: forall a m. TypeCheck a m => Value a -> m (Value a)
 sortOfKind (VFn _ _) = pure (VSet 0)
-sortOfKind (VPi v _ d r) = do
-  d <- sortOfKind d
-  r <- sortOfKind (r (valueVar v))
+sortOfKind (VPi binder r) = do
+  d <- sortOfKind (domain binder)
+  r <- sortOfKind (r (valueVar (var binder)))
   liftIO $ print (d, r)
   case (d, r) of
     (VNe NProp, _) -> pure (VNe NProp)
@@ -111,10 +110,10 @@ subsumesNe kind a b =
 
     subsumesTelescope :: Value a -> Seq (Value a) -> Seq (Value a) -> m ()
     subsumesTelescope _ Seq.Empty Seq.Empty = pure ()
-    subsumesTelescope (VPi var _ dom range) (a Seq.:<| as) (b Seq.:<| bs) = do
+    subsumesTelescope (VPi binder range) (a Seq.:<| as) (b Seq.:<| bs) = do
       subsumes a b
-      new <- refresh var
-      assume new dom $
+      new <- refresh (var binder)
+      assume new (domain binder) $
         subsumesTelescope (range (valueVar new)) as bs
     subsumesTelescope t (a Seq.:<| as) (b Seq.:<| bs) = do
       subsumes a b
@@ -169,9 +168,9 @@ checkScope set (Elim a) = go a where
     checkScope set a
     checkScope set b
   go Meta{} = pure ()
-checkScope set (Pi (Binder var _vis domain) range) = do
-  checkScope set domain
-  checkScope (Set.insert var set) range
+checkScope set (Pi binder range) = do
+  checkScope set (domain binder)
+  checkScope (Set.insert (var binder) set) range
 checkScope set (Lam var body) = checkScope (Set.insert var set) body
 checkScope _ Set{} = pure ()
 
