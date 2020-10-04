@@ -61,6 +61,7 @@ reportUnsolved lines env m = do
   Right (ex, _) <- runChecker (zonk (metaExpected m)) env
   let dropT (Binder{Qtt.var = v}:bs) (VPi _ rng) = dropT bs (rng (valueVar v))
       dropT [] t = t
+      dropT _ _ = undefined
 
       metaT = dropT (metaTelescope m) (ex)
   putStrLn $ "Note: it was expected to have type " ++ show metaT

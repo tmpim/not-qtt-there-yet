@@ -42,8 +42,7 @@ checkRaw (P.Set j) value = do
     typeError (TypeTooBig j i)
   pure (Set j)
 
-checkRaw l@(P.Lam vis var body) term = do
-  liftIO . putStrLn $ "Checking lambda " ++ show l ++ " against " ++ show term
+checkRaw (P.Lam vis var body) term = do
   (dom, range, _wp) <- isPiType vis (Just var) term
   term <-
     assume var dom $
@@ -228,7 +227,6 @@ checkProgram [] kont = do
   unp <- asks unproven
   unless (Map.null unp) $ do
     for_ (Map.toList unp) $ \(m, loc) -> do
-      liftIO . print =<< lookupType m
       withLocation loc $ \() -> typeError (Undefined m)
 
   kont

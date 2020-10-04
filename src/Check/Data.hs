@@ -138,7 +138,9 @@ makeInductionPrinciple Data{..} =
       let (ki'', dropped) = dropArgs ki' len
       t <- evaluate (Elim ki)
       q <- evaluate (Elim ki'')
-      subsumes t q
+      _ <- subsumes t q
+      -- justification for dropping wrapper: we don't have a term to wrap!
+      -- (just checking the types line up, after all.)
       pure (reverse dropped)
     mkCheck _ w h = typeError (WrongDataReturn w h)
 
@@ -312,6 +314,7 @@ dropArgs x 0 = (x, [])
 dropArgs (App f t) n = second (t:) $ dropArgs f (n - 1)
 dropArgs x@Var{} _ = (x, [])
 dropArgs x@Meta{} _ = (x, [])
+dropArgs x@Prop{} _ = (x, [])
 dropArgs x@Cut{} _ = (x, [])
 
 elimHead :: Elim var -> Elim var

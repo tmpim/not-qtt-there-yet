@@ -96,13 +96,14 @@ subsumesNe kind a b =
     subsumesTelescope :: Value a -> Seq (Value a) -> Seq (Value a) -> m ()
     subsumesTelescope _ Seq.Empty Seq.Empty = pure ()
     subsumesTelescope (VPi binder range) (a Seq.:<| as) (b Seq.:<| bs) = do
-      subsumes a b
+      _ <- subsumes a b
       new <- refresh (var binder)
       assume new (domain binder) $
         subsumesTelescope (range (valueVar new)) as bs
     subsumesTelescope t (a Seq.:<| as) (b Seq.:<| bs) = do
-      subsumes a b
+      _ <- subsumes a b
       subsumesTelescope t as bs
+    subsumesTelescope _ _ _ = error "Malformed subsumesTelescope"
 
 solve :: TypeCheck a m
       => Meta a
@@ -123,7 +124,6 @@ solve meta@MV{..} spine val
         case x of
           Nothing -> do
             solveMeta meta
-            liftIO . putStrLn $ "*** Solved: " ++ show (NApp (NMeta meta) spine) ++ " with " ++ show fakeLam
             liftIO $ putMVar metaSlot (quote fakeLam)
             t <- liftIO $ swapMVar metaBlockedEqns mempty
             for_ t $ \(Equation meta spine val) -> do
@@ -154,6 +154,7 @@ checkScope set (Elim a) = go a where
     checkScope set a
     checkScope set b
   go Meta{} = pure ()
+  go Prop{} = pure ()
 checkScope set (Pi binder range) = do
   checkScope set (domain binder)
   checkScope (Set.insert (var binder) set) range
@@ -177,6 +178,7 @@ sortOfKind (VPi binder r) = do
     (VNe NProp, _) -> pure (VNe NProp)
     (_, VNe NProp) -> pure (VNe NProp)
     (VSet a, VSet b) -> pure (VSet (max a b))
+    (_, _) -> undefined
 sortOfKind (VSet i) = pure (VSet (i + 1))
 sortOfKind (VNe a) =
   case a of
@@ -220,24 +222,35 @@ isPiType :: TypeCheck a m
               )
 isPiType Visible   _ (VPi Binder{visibility = Visible, domain = a} b)   = pure (a, b, id)
 isPiType Invisible _ (VPi Binder{visibility = Invisible, domain = a} b) = pure (a, b, id)
+isPiType Invisible _ t@(VPi Binder{visibility = Visible} _) =
+  typeError (NotPi Invisible t)
 
 isPiType Visible hint (VPi Binder{visibility = Invisible, domain = dom } rng) = do
   meta <- freshMeta dom
   (domain, range, inner) <- isPiType Visible hint (rng meta)
   pure (domain, range, \x -> inner (App x (quote meta)))
 
-isPiType _ _ ty@VSet{} = typeError (NotPi ty)
-isPiType _ _ ty@VFn{} = typeError (NotPi ty)
-isPiType over hint t = do
+isPiType v _ ty@VSet{} = typeError (NotPi v ty)
+isPiType v _ ty@VFn{} = typeError (NotPi v ty)
+isPiType over hint t@VNe{} = do
   name <- case hint of
     Just t -> pure t
     Nothing -> fresh
+
   domain <- freshMeta (VSet maxBound)
+
   assume name domain $ do
     range <- freshMeta (VSet maxBound)
     let binder = Binder { var = name
                         , domain = domain
                         , visibility = over
                         }
-    subsumes t (VPi binder (const range))
+    _ <- subsumes t (VPi binder (const range))
+    -- Justification for dropping the wrapper. By cases:
+    -- if t == VNe NProp, subsumes fails
+    -- if t == VNe (NVar _), subsumes fails
+    -- if t == VNe (NApp (NVar _) _), subsumes fails
+    -- if t == VNe (NMeta _), subsumes works and returns id
+    -- if t == VNe (NApp (NMeta _) _), subsumes works and returns id
+    -- therefore the wrapper is either id or unreachable
     pure (domain, const range, id)

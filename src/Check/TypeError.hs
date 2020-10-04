@@ -1,6 +1,6 @@
 module Check.TypeError where
 
-import Qtt (Term, Elim, quote, Meta, Value)
+import Qtt (Visibility(..), Term, Elim, quote, Meta, Value)
 
 import Presyntax (ExprL)
 import Data.List (intercalate)
@@ -8,7 +8,7 @@ import Data.List (intercalate)
 data TypeError a
   = NotInScope a
   | NotEqual (Value a) (Value a)
-  | NotPi (Value a)
+  | NotPi Visibility (Value a)
   | NotSet (Value a)
   | CanNotInfer (ExprL a)
   | NotMillerPattern (Meta a) [Value a] (Value a)
@@ -26,7 +26,8 @@ data Timing a
 
 instance (Show a, Eq a) => Show (TypeError a) where
   show (NotInScope a) = "Variable not in scope: " ++ show a
-  show (NotPi v) = "Type is not a product type: " ++ show (quote v)
+  show (NotPi Invisible v) = "Type is not a function type: " ++ show (quote v)
+  show (NotPi Visible v) = "Type is not an invisible function type: " ++ show (quote v)
   show (NotSet v) = "Type is not a universe type: " ++ show (quote v)
   show (NotEqual a b) = "Types " ++ show (quote a) ++ " and " ++ show (quote b) ++ " are not equal."
   show (CanNotInfer e) = "Can not infer kind for type " ++ show e
