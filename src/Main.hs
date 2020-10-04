@@ -42,7 +42,9 @@ testFile path = do
       print e
       printRange lines r
     Right (env, deferred) -> do
-      for_ deferred print
+      for_ deferred $ \(Equation a b c) -> do
+        Right (c, _) <- runChecker (zonk c) env
+        print (Equation a b c)
       set <- takeMVar (unsolvedMetas env)
       for_ (toList set) (reportUnsolved lines env)
       unless (null set) exitFailure

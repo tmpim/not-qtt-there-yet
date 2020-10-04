@@ -5,7 +5,7 @@ fst : {A : Type₀} {B : (x : A) -> Type₀} (x : sigma A B) → A
 fst {A} = sigma.elim (λ s → A) (λ x y → x)
 
 snd : {A : Type₀} {B : (x : A) -> Type₀} (x : sigma A B) -> B (fst x)
-snd {a} {B} x = sigma.elim (λ s → B (fst x)) (λ x y → y) x
+snd {A} {B} = sigma.elim (λ s → B (fst {A} {B} s)) (λ x y → y)
 
 data Id (A : Type₀) (x : A) : (y : A) → Type₀ where
   refl : Id A x x

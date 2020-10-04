@@ -39,7 +39,7 @@ subsumes val (VNe a)
   | Just (meta, spine) <- isMeta a = solve meta spine val
 
 subsumes (VPi binder rng) (VPi binder' rng') | visibility binder == visibility binder' = do
-  coe <- subsumes (domain binder) (domain binder')
+  coe <- subsumes (domain binder') (domain binder)
   var <- fresh
   assume var (domain binder) $ do
     let cast = coe (valueVar var)
