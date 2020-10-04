@@ -1,23 +1,23 @@
-data (indSigma) sigma (A : Type₀) (B : (x : A) -> Type₀) : Type₀ where
+data sigma (A : Type₀) (B : (x : A) -> Type₀) : Type₀ where
   pair : (x : A) (p : B x) -> sigma A B
 
-fst : (A : Type₀) (B : (x : A) -> Type₀) (x : sigma A B) → A
-fst A B = indSigma (λ s → A) (λ x y → x)
+fst : {A : Type₀} {B : (x : A) -> Type₀} (x : sigma A B) → A
+fst {A} = sigma.elim (λ s → A) (λ x y → x)
 
-snd : (A : Type₀) (B : (x : A) -> Type₀) (x : sigma A B) -> B (fst A B x)
-snd A B = indSigma (λ s → B (fst A B s)) (λ x y → y)
+snd : {A : Type₀} {B : (x : A) -> Type₀} (x : sigma A B) -> B (fst x)
+snd {a} {B} x = sigma.elim (λ s → B (fst x)) (λ x y → y) x
 
-data (axJ) Id (A : Type₀) (x : A) : (y : A) → Type₀ where
+data Id (A : Type₀) (x : A) : (y : A) → Type₀ where
   refl : Id A x x
 
-data (indUnit) unit : Type₀ where
+data unit : Type₀ where
   tt : unit
 
 contractible : (A : Type₀) -> Type₁
 contractible A = sigma A (λ x → (y : A) → Id A x y)
 
 contractUnit : (x : unit) -> Id unit tt x
-contractUnit = indUnit (λ x -> Id _ tt x) (refl {_} {tt})
+contractUnit = unit.elim (λ x -> Id _ tt x) (refl {unit})
 
 unitContractible : contractible unit
 unitContractible = pair tt contractUnit

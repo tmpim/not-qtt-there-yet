@@ -64,9 +64,11 @@ decimal :: Parser Integer
 decimal = lexeme L.decimal
 
 programWord :: Parser Text
-programWord = lexeme (takeWhile1P (Just "an identifier") pred) where
-  pred :: Char -> Bool
-  pred ch = ('a' <= ch && ch <= 'z') || ('A' <= ch && ch <= 'Z')
+programWord = lexeme (T.cons <$> satisfy idHead <*> takeWhileP Nothing idTail) <?> "an identifier" where
+  idHead :: Char -> Bool
+  idHead ch = ('a' <= ch && ch <= 'z') || ('A' <= ch && ch <= 'Z')
+
+  idTail ch = (ch == '.') || ('0' <= ch && ch <= '9') || idHead ch
 
 keywords :: HashSet Text
 keywords = HashSet.fromList ["where", "data"]

@@ -49,7 +49,6 @@ import Check.Monad
 import Qtt.Environment
 import Qtt.Evaluate
 import Qtt
-import Debug.Trace (traceShow, traceShowId)
 
 data Data var =
   Data { dataName :: var
@@ -85,7 +84,7 @@ makeInductionPrinciple Data{..} =
     dataSort <- evaluate (quantify args_tele (quote dataKind))
 
     motive <- freshWithHint "P"
-    the_datum <- freshWithHint ("t" ++ show dataName)
+    the_datum <- freshWithHint "it"
 
     (ixes, sort) <- getIxTele dataKind
     let datum = appToTele (Var dataName) (args_tele ++ ixes)
@@ -182,8 +181,9 @@ makeInductionPrinciple Data{..} =
     -- Something else (Set, etc). Just ignore it
     getInductives ixC (_:rst) = getInductives ixC rst
 
+-- | Mark a binder as invisible
 invisCloak :: Binder a var -> Binder a var
-invisCloak binder = binder { visibility = Visible }
+invisCloak binder = binder { visibility = Invisible }
 
 {-
 for a type like
@@ -221,10 +221,10 @@ makeRecursor name Data{..} =
     --   A function which accumulates `length arg` arguments, splits on the last of these,
     --   and eliminates the data type X Δ.
     makeRecursor :: Map.Map var (Int, Seq (Value var) -> [Value var] -> Seq (Value var)) -> [Value var] -> (Int, Int) -> [var] -> Value var
-    makeRecursor cases acc (nArgs, nIndices) [] = traceShow ("static", static) $
+    makeRecursor cases acc (nArgs, nIndices) [] =
       case acc of
         head:_ | Just ((i, worker), cArgs) <- isCon cases head ->
-          foldl (@@) (args !! (skip + i)) (traceShowId (cArgs <> worker cArgs static) :: Seq (Value var))
+          foldl (@@) (args !! (skip + i)) (cArgs <> worker cArgs static)
         _ -> (foldl (@@) (valueVar name) (reverse acc))
       where
         args = reverse acc

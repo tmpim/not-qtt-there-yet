@@ -37,16 +37,24 @@ freshMeta :: (MonadReader (Env a) m, MonadIO m, Fresh a, Ord a) => Value a -> m 
 freshMeta expected = do
   id <- fresh
   top <- asks toplevel
-  vars <- asks (Map.keys . flip Map.withoutKeys top . assumptions)
+  tele <- asks (Map.toList . flip Map.withoutKeys top . assumptions)
   loc <- asks locationStack
+
+  let quantify ((a, b):xs) t = VPi Binder{ visibility = Visible, domain = b, var = a } (\_ -> quantify xs t)
+      quantify [] t = t
+
+      teleify = map (\(a, b) -> Binder { visibility = Visible, domain = b, var = a })
+
   meta <- liftIO $ MV id -- metavariable identifier
                <$> newEmptyMVar -- metavariable solution
                <*> newMVar mempty -- eqns blocked on this meta
                <*> pure (head loc)
-               <*> pure expected
+               <*> pure (quantify tele expected)
+               <*> pure (teleify tele)
+
   unsolved <- asks unsolvedMetas
   liftIO . modifyMVar_ unsolved $ pure . Set.insert meta
-  pure (VNe (NApp (NMeta meta) (fmap valueVar (Seq.fromList vars))))
+  pure (VNe (NApp (NMeta meta) (fmap valueVar (Seq.fromList (map fst tele)))))
 
 solveMeta :: TypeCheck a m => Meta a -> m ()
 solveMeta meta = do
@@ -72,24 +80,6 @@ getUnsolvedMetas = do
     case t of
       Nothing -> mempty
       Just set -> set
-
-elimType :: TypeCheck var m
-         => Neutral var
-         -> m (Value var)
-elimType (NVar v) = do
-  t <- lookupType v
-  case t of
-    Nothing -> typeError (NotInScope v)
-    Just t -> pure $ t
-elimType (NMeta mv) = pure (metaExpected mv)
-elimType (NApp f xs) = do
-  kind <- elimType f
-  let go (VPi binder r) as        = go (r (valueVar (var binder))) as
-      go (VPi _ r) (a Seq.:<| xs) = go (r a) xs
-      go t Seq.Empty              = pure t
-      go a _ = typeError (NotPi a)
-  go kind xs
-elimType NProp = pure $ VSet 1
 
 typeError :: TypeCheck var m => TypeError var -> m b
 typeError e = do

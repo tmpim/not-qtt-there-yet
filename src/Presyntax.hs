@@ -7,12 +7,15 @@ import Data.Range
 import Data.Text (Text)
 import qualified Data.Text as T
 
+import Qtt (Visibility(..))
+
 data Expr f a
   = Var a
-  | App Bool (f (Expr f a)) (f (Expr f a))
-  | Lam a (f (Expr f a))
+  | App Visibility (f (Expr f a)) (f (Expr f a))
+  | Lam Visibility a (f (Expr f a))
+  | Pi  Visibility a (f (Expr f a)) (f (Expr f a))
   | Cut (f (Expr f a)) (f (Expr f a))
-  | Pi a (f (Expr f a)) (f (Expr f a))
+  | Let a (f (Expr f a)) (f (Expr f a))
   | Set Int
   | Prop
   | Hole
@@ -33,9 +36,14 @@ data Var = Intro Text | Refresh Text Int
 
 instance Fresh Var where
   fresh = Intro . T.pack <$> fresh
+
   refresh (Intro v) = Refresh v <$> fresh
   refresh (Refresh v x) = Refresh v . (x +) <$> fresh
+
   freshWithHint c = Refresh (T.pack c) <$> fresh
+
+  derive s (Intro v) = Intro (v <> T.pack s)
+  derive s (Refresh v x) = Refresh (v <> T.pack s) x
 
 getVar :: Var -> Text
 getVar (Intro x) = x
@@ -50,7 +58,6 @@ data Decl f var
   = TypeSig var (f (Expr f var))
   | Value   var (f (Expr f var))
   | DataDecl { dataName         :: var
-             , dataEliminator   :: var
              , dataParams       :: [f (var, f (Expr f var))]
              , dataKind         :: f (Expr f var)
              , dataConstructors :: [f (var, f (Expr f var))]

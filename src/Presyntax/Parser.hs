@@ -11,6 +11,8 @@ import Data.Foldable
 import Control.Exception (throwIO)
 import qualified Text.Megaparsec.Char.Lexer as L
 
+import Qtt (Visibility(..))
+
 loc :: Parser a -> Parser (L a)
 loc k = do
   start <- getSourcePos
@@ -45,11 +47,12 @@ expr0 = loc lambda <|> loc (try quantifier) <|> atom
 
 quantifier :: Parser (Expr L Var)
 quantifier = pi where
-  binder = parens $ (,) <$> identifier <*> (colon *> expr)
+  binder = parens ((,,) Visible   <$> identifier <*> (colon *> expr))
+       <|> braces ((,,) Invisible <$> identifier <*> (colon *> expr))
   pi = do
-    (name, ty) <- binder
+    (vis, name, ty) <- binder
     x <- optional arrow
-    Pi (Intro name) ty <$> case x of
+    Pi vis (Intro name) ty <$> case x of
       Nothing -> loc pi
       Just _ -> expr
 
@@ -61,9 +64,9 @@ lambda =
   where
     lambdaForm :: Parser (Expr L Var)
     lambdaForm = do
-      x <- identifier
+      (v, x) <- ((,) Visible <$> identifier) <|> ((,) Invisible <$> braces identifier)
       t <- optional arrow
-      Lam (Intro x) <$> case t of
+      Lam v (Intro x) <$> case t of
         Nothing -> loc lambdaForm
         Just _ -> expr
 
@@ -76,7 +79,7 @@ expr =
     app head [] = head
     app head ((vis, a):rest) = app (L (App vis head a) (lRange head <> lRange a)) rest
 
-    applied = ((,) True <$> braces expr) <|> ((,) False <$> expr0)
+    applied = ((,) Invisible <$> braces expr) <|> ((,) Visible <$> expr0)
 
 decl :: Parser (L (Decl L Var))
 decl =
@@ -91,20 +94,22 @@ decl =
     definition = do
       c <- optional equals
       case c of
-        Nothing -> loc $ Lam <$> var <*> definition
+        Nothing -> loc do
+          (vis, nam) <- arg
+          Lam vis (Intro nam) <$> definition
         Just _ -> expr
+    arg = ((,) Visible <$> identifier) <|> ((,) Invisible <$> braces identifier)
 
 dataDecl :: Parser (L (Decl L Var))
 dataDecl = loc $ L.indentBlock cuboSpaceN parseHeader where
   parseHeader = do
     _ <- symbol "data"
-    eliminator <- parens var
     name <- var
     params <- many (loc (parens ((,) <$> (var <* colon) <*> expr)))
     _ <- colon
     kind <- expr
     _ <- symbol "where"
-    pure (L.IndentMany Nothing (pure . DataDecl name eliminator params kind) parseConstructor)
+    pure (L.IndentMany Nothing (pure . DataDecl name params kind) parseConstructor)
   
   parseConstructor :: Parser (L (Var, L (Expr L Var)))
   parseConstructor = loc ((,) <$> var <*> (colon *> expr))

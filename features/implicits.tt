@@ -1,0 +1,16 @@
+data Id (A : Type₁) (x : A) : (y : A) → Type₁ where
+  refl : Id A x x
+
+data nat : Type₀ where
+  zero : nat
+  succ : (x : nat) → nat
+
+add : (x : nat) (y : nat) → nat
+add = nat.elim (λ n → (x : nat) → nat) (λ k -> k) (λ n k x -> succ (k x))
+
+data vect (A : Type₀) : (len : nat) → Type₀ where
+  nil  : vect A zero
+  cons : {n : nat} (h : A) (t : vect A n) → vect A (succ n)
+
+append : {xsl : nat} {ysl : nat} (A : Type₀) (xs : vect A xsl) (ys : vect A ysl) → vect A (add xsl ysl)
+append {xsl} {ysl} A xs ys = vect.elim (λ n v → vect A (add n ysl)) ys (λ {n} h t cat -> cons h cat) xs

@@ -1,12 +1,12 @@
-data (axJ) Id (A : Type₁) (x : A) : (y : A) → Type₁ where
+data Id (A : Type₁) (x : A) : (y : A) → Type₁ where
   refl : Id A x x
 
-data (indNat) nat : Type₀ where
+data nat : Type₀ where
   zero : nat
   succ : (x : nat) → nat
 
 add : (x : nat) (y : nat) → nat
-add = indNat (λ n → (x : nat) → nat) (λ k -> k) (λ n k x -> succ (k x))
+add = nat.elim (λ n → (x : nat) → nat) (λ k -> k) (λ n k x -> succ (k x))
 
 twoplustwo : Id nat (add (succ (succ zero)) (succ (succ zero))) (succ (succ (succ (succ zero))))
-twoplustwo = refl {nat} {_}
+twoplustwo = refl

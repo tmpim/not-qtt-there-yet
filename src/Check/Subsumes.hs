@@ -46,6 +46,12 @@ subsumes (VPi binder rng) (VPi binder' rng') | visibility binder == visibility b
     rng <- subsumes (rng cast) (rng' (valueVar var))
     pure (\vl -> VFn var (\b -> rng (vl @@ (coe b))))
 
+subsumes (VPi b@Binder{visibility=Invisible} range) r = do
+  m <- freshMeta (domain b)
+  assume (var b) (domain b) $ do
+    w <- subsumes (range m) r
+    pure (\vl -> w (vl @@ m))
+
 -- λx. e ≡ g → e ≡ g x
 subsumes (VFn var k) b =
   subsumes (k (valueVar var)) (b @@ valueVar var)
@@ -67,27 +73,6 @@ isMeta (NMeta m) = pure (m, Seq.empty)
 isMeta (NApp (NMeta m) t) = pure (m, t)
 isMeta _ = Nothing
 
-sortOfKind :: forall a m. TypeCheck a m => Value a -> m (Value a)
-sortOfKind (VFn _ _) = pure (VSet 0)
-sortOfKind (VPi binder r) = do
-  d <- sortOfKind (domain binder)
-  r <- sortOfKind (r (valueVar (var binder)))
-  liftIO $ print (d, r)
-  case (d, r) of
-    (VNe NProp, _) -> pure (VNe NProp)
-    (_, VNe NProp) -> pure (VNe NProp)
-    (VSet a, VSet b) -> pure (VSet (max a b))
-sortOfKind (VSet i) = pure (VSet (i + 1))
-sortOfKind (VNe a) =
-  case a of
-    NVar t -> do
-      ty <- lookupType t
-      case ty of
-        Just k -> pure k
-        Nothing -> typeError (NotInScope t)
-    NMeta t -> sortOfKind (metaExpected t)
-    NProp -> pure (VSet 1)
-    NApp v t -> elimType (NApp v t)
 
 subsumesNe :: forall a m. TypeCheck a m
            => Value a
@@ -138,6 +123,7 @@ solve meta@MV{..} spine val
         case x of
           Nothing -> do
             solveMeta meta
+            liftIO . putStrLn $ "*** Solved: " ++ show (NApp (NMeta meta) spine) ++ " with " ++ show fakeLam
             liftIO $ putMVar metaSlot (quote fakeLam)
             t <- liftIO $ swapMVar metaBlockedEqns mempty
             for_ t $ \(Equation meta spine val) -> do
@@ -147,7 +133,7 @@ solve meta@MV{..} spine val
             tv <- evaluate t
             subsumes (foldl (@@) tv spine) =<< evaluate (quote (foldl (@@) fakeLam spine))
       `catchError` \(_, r) -> do
-        m <- zonk (VNe (NMeta meta))
+        m <- zonk (VNe (NApp (NMeta meta) spine))
         throwError ((NotEqual m val), r)
   | otherwise = id <$ defer meta spine val
 
@@ -181,3 +167,77 @@ isPattern = go mempty where
     | otherwise = go (Set.insert v x) rest
   go _ (_ Seq.:<| _) = Nothing
   go x Seq.Empty = Just x
+
+sortOfKind :: forall a m. TypeCheck a m => Value a -> m (Value a)
+sortOfKind (VFn _ _) = pure (VSet 0)
+sortOfKind (VPi binder r) = do
+  d <- sortOfKind (domain binder)
+  r <- sortOfKind (r (valueVar (var binder)))
+  case (d, r) of
+    (VNe NProp, _) -> pure (VNe NProp)
+    (_, VNe NProp) -> pure (VNe NProp)
+    (VSet a, VSet b) -> pure (VSet (max a b))
+sortOfKind (VSet i) = pure (VSet (i + 1))
+sortOfKind (VNe a) =
+  case a of
+    NVar t -> do
+      ty <- lookupType t
+      case ty of
+        Just k -> pure k
+        Nothing -> typeError (NotInScope t)
+    NMeta t -> sortOfKind (metaExpected t)
+    NProp -> pure (VSet 1)
+    NApp v t -> elimType (NApp v t)
+
+elimType :: TypeCheck var m
+         => Neutral var
+         -> m (Value var)
+elimType (NVar v) = do
+  t <- lookupType v
+  case t of
+    Nothing -> typeError (NotInScope v)
+    Just t -> pure $ t
+elimType (NMeta mv) = pure (metaExpected mv)
+elimType (NApp f xs) = do
+  kind <- elimType f
+  let -- Apply actual arguments
+      go (VPi _ r) (a Seq.:<| xs)
+        = go (r a) xs
+      -- Empty arguments: that's the type
+      go t Seq.Empty  = pure t
+      -- Anything else, we've screwed up
+      go t (a Seq.:<| as) = error (show (NApp f xs, kind, t, a, as))
+  go kind xs
+elimType NProp = pure $ VSet 1
+
+isPiType :: TypeCheck a m
+         => Visibility    -- What visibility of Π do we need?
+         -> Maybe a
+         -> Value a
+         -> m ( Value a
+              , Value a -> Value a
+              , Elim a -> Elim a
+              )
+isPiType Visible   _ (VPi Binder{visibility = Visible, domain = a} b)   = pure (a, b, id)
+isPiType Invisible _ (VPi Binder{visibility = Invisible, domain = a} b) = pure (a, b, id)
+
+isPiType Visible hint (VPi Binder{visibility = Invisible, domain = dom } rng) = do
+  meta <- freshMeta dom
+  (domain, range, inner) <- isPiType Visible hint (rng meta)
+  pure (domain, range, \x -> inner (App x (quote meta)))
+
+isPiType _ _ ty@VSet{} = typeError (NotPi ty)
+isPiType _ _ ty@VFn{} = typeError (NotPi ty)
+isPiType over hint t = do
+  name <- case hint of
+    Just t -> pure t
+    Nothing -> fresh
+  domain <- freshMeta (VSet maxBound)
+  assume name domain $ do
+    range <- freshMeta (VSet maxBound)
+    let binder = Binder { var = name
+                        , domain = domain
+                        , visibility = over
+                        }
+    subsumes t (VPi binder (const range))
+    pure (domain, const range, id)

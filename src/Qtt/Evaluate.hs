@@ -10,7 +10,6 @@ import Qtt.Environment
 import Qtt
 import System.IO.Unsafe (unsafePerformIO)
 import Control.Monad.Reader (ReaderT(runReaderT))
-import qualified Data.Sequence as Seq
 
 evaluate :: (MonadReader (Env a) m, Ord a, Show a) => Term a -> m (Value a)
 evaluate (Elim a) = evaluateNeutral a
@@ -50,7 +49,7 @@ zonk (VNe n) = zonkNeutral n where
     t <- liftIO $ tryReadMVar metaSlot
     case t of
       Nothing -> VNe . NApp mv <$> traverse zonk ts
-      Just t -> zonk . flip (foldl (@@)) (Seq.reverse ts) =<< evaluate t
+      Just t -> zonk . flip (foldl (@@)) ts =<< evaluate t
   zonkNeutral nm@(NMeta MV{..}) = do
     t <- liftIO $ tryReadMVar metaSlot
     case t of
@@ -65,6 +64,8 @@ zonk (VNe n) = zonkNeutral n where
 zonk (VPi b r) = do
   b <- fmap (\d -> b { domain = d }) $ zonk (domain b)
   pure $ VPi b (\arg -> unsafeZonkDomain (r arg))
+zonk (VFn v r) = do
+  pure $ VFn v (\arg -> unsafeZonkDomain (r arg))
 zonk x = pure x
 
 -- | What can I say but "Yikes".

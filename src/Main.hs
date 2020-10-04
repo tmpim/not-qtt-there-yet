@@ -25,24 +25,9 @@ import Control.Concurrent (takeMVar)
 import Data.Foldable (for_)
 import System.Exit (exitFailure)
 
-
 main :: IO ()
 main = do
   putStrLn "hello world"
-
-  {-
-
-  c <- asks unsolvedMetas
-  set <- liftIO $ takeMVar c
-  for (toList set) $ \m ->
-    liftIO . putStrLn $ "Unsolved meta: " ++ show m
-
-  t <- asks envVariables
-  liftIO . putStrLn $ "Theorems: "
-  for t $ \v -> do
-    ~(Just t) <- lookupType v
-    liftIO . putStrLn $ show v ++ " : " ++ show t
-    -}
 
 testFile :: String -> IO ()
 testFile path = do
@@ -59,17 +44,24 @@ testFile path = do
     Right (env, deferred) -> do
       for_ deferred print
       set <- takeMVar (unsolvedMetas env)
-      for_ (toList set) $ \m -> do
-        putStrLn $ "Error: Unsolved metavariable: " ++ show m
-        printRange lines (metaLocation m)
-        Right (ex, _) <- runChecker (zonk (metaExpected m)) env
-        putStrLn $ "Note: it was expected to have type " ++ show ex
+      for_ (toList set) (reportUnsolved lines env)
       unless (null set) exitFailure
 
       liftIO . putStrLn $ "Theorems: "
       for_ (Map.toList (assumptions env)) $ \(v, t) -> do
         Right (zonked, _) <- runChecker (zonk t) env
         putStrLn $ show v ++ " : " ++ show (prettify mempty zonked)
+
+reportUnsolved :: [T.Text] -> Env Var -> Meta Var -> IO ()
+reportUnsolved lines env m = do
+  putStrLn $ "Error: Unsolved metavariable: " ++ show m
+  printRange lines (metaLocation m)
+  Right (ex, _) <- runChecker (zonk (metaExpected m)) env
+  let dropT (Binder{Qtt.var = v}:bs) (VPi _ rng) = dropT bs (rng (valueVar v))
+      dropT [] t = t
+
+      metaT = dropT (metaTelescope m) (ex)
+  putStrLn $ "Note: it was expected to have type " ++ show metaT
 
 printRange :: [T.Text] -> Range -> IO ()
 printRange lines r = do

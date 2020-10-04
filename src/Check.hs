@@ -13,7 +13,7 @@ import Qtt.Evaluate
 import Qtt
 
 import Check.TypeError ( TypeError(..) )
-import Check.Subsumes ( subsumes )
+import Check.Subsumes ( subsumes, isPiType )
 import Check.Monad
 import Check.Fresh
 import Check.Data
@@ -27,33 +27,43 @@ checkLoc :: TypeCheck a m => P.ExprL a -> Value a -> m (Term a)
 checkLoc t v = withLocation t $ \ex -> checkRaw ex v
 
 checkRaw :: TypeCheck a m => P.Expr P.L a -> Value a -> m (Term a)
+checkRaw v (VPi b@Binder{visibility=Invisible} rng) | not (implicitLam v)
+  = do
+    assume (var b) (domain b) $ do
+      tm <- checkRaw v (rng (valueVar (var b)))
+      pure (Lam (var b) tm)
+  where
+    implicitLam (P.Lam v _ _) = v == Invisible
+    implicitLam _ = False
+    
 checkRaw (P.Set j) value = do
   i <- isSet value
   unless (j < i) $
     typeError (TypeTooBig j i)
   pure (Set j)
 
-checkRaw (P.Lam var body) term = do
-  (dom, range, _wp) <- isPiType False (Just var) term
+checkRaw l@(P.Lam vis var body) term = do
+  liftIO . putStrLn $ "Checking lambda " ++ show l ++ " against " ++ show term
+  (dom, range, _wp) <- isPiType vis (Just var) term
   term <-
     assume var dom $
       checkLoc body (range (valueVar var))
   pure (Lam var term)
 
-checkRaw (P.Pi var domain range) prop@(VNe NProp) = do
+checkRaw (P.Pi vis var domain range) prop@(VNe NProp) = do
   term <- checkLoc domain prop
   domain <- evaluate term
   assume var domain $ do
     range <- checkLoc range prop
-    pure (Pi (Binder var Visible term) range)
+    pure (Pi (Binder var vis term) range)
 
-checkRaw (P.Pi var domain range) i = do
+checkRaw (P.Pi vis var domain range) i = do
   i <- isSet i
   term <- checkLoc domain (VSet i)
   domain <- evaluate term
   assume var domain $ do
     range <- checkLoc range (VSet i)
-    pure (Pi (Binder var Visible term) range)
+    pure (Pi (Binder var vis term) range)
 
 checkRaw P.Hole ty = do
   m <- freshMeta ty
@@ -68,8 +78,9 @@ checkRaw P.Prop ty = do
 
 checkRaw exp expected = do
   (term, ty) <- inferRaw exp
-  subsumes ty expected
-  pure (Elim term)
+  w <- subsumes ty expected
+  nf <- evaluateNeutral term
+  pure (quote (w nf))
 
 inferLoc :: TypeCheck a m => P.ExprL a -> m (Elim a, Value a)
 inferLoc ex = withLocation ex inferRaw
@@ -84,7 +95,7 @@ inferRaw (P.Var a) = do
 inferRaw (P.App t a b) = do
   (elimA, tyA) <- inferLoc a
   (dom, range, wp) <- isPiType t Nothing tyA
-  (termB) <- checkLoc b dom
+  termB <- checkLoc b dom
   nfB <- evaluate termB
   pure (wp elimA `App` termB, range nfB)
   
@@ -139,7 +150,9 @@ checkDeclRaw (P.Value var dec) = do
       nf_c <- evaluate (Elim t)
       pure (declare var ty nf_c . local prove)
 
-checkDeclRaw (P.DataDecl name eliminator dataParams dataKind constructors) = do
+checkDeclRaw (P.DataDecl name dataParams dataKind constructors) = do
+  let eliminator = derive ".elim" name
+
   params <- checkTelescope dataParams . flip withLocation $ \(name, sort) -> do
     sort <- checkLoc sort (VSet maxBound)
     sort_nf <- evaluate sort
@@ -214,46 +227,13 @@ checkProgram :: TypeCheck var m => [P.L (P.Decl P.L var)] -> m b -> m b
 checkProgram [] kont = do
   unp <- asks unproven
   unless (Map.null unp) $ do
-    for_ (Map.toList unp) $ \(m, loc) ->
+    for_ (Map.toList unp) $ \(m, loc) -> do
+      liftIO . print =<< lookupType m
       withLocation loc $ \() -> typeError (Undefined m)
 
   kont
 checkProgram (d:ds) kont = flip id (checkProgram ds kont) =<< checkDeclLoc d
 
-isPiType :: TypeCheck a m
-         => Bool    -- Visbility override?
-         -> Maybe a
-         -> Value a
-         -> m ( Value a
-              , Value a -> Value a
-              , Elim a -> Elim a
-              )
-isPiType _ _ (VPi Binder{visibility = Visible, domain = a} b)      = pure (a, b, id)
-isPiType True _ (VPi Binder{visibility = Invisible, domain = a} b) = pure (a, b, id)
-
-isPiType False hint (VPi Binder{visibility = Invisible, domain = dom } rng) = do
-  meta <- freshMeta dom
-  (domain, range, inner) <- isPiType False hint (rng meta)
-  pure (domain, range, \x -> App (inner x) (quote meta))
-
-isPiType _ _ ty@VSet{} = typeError (NotPi ty)
-isPiType _ _ ty@VFn{} = typeError (NotPi ty)
-isPiType over hint t = do
-  name <- case hint of
-    Just t -> pure t
-    Nothing -> fresh
-  domain <- freshMeta (VSet maxBound)
-  assume name domain $ do
-    range <- freshMeta (VSet maxBound)
-    let binder = Binder { var = name
-                        , domain = domain
-                        , visibility =
-                            if over
-                              then Invisible
-                              else Visible
-                        }
-    subsumes t (VPi binder (const range))
-    pure (domain, const range, id)
 
 isSet :: TypeCheck a m => Value a -> m Int
 isSet (VSet i) = pure i

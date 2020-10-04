@@ -1,4 +1,4 @@
-data (axJ) Id (A : Type₁) (x : A) : (y : A) → Type₁ where
+data Id (A : Type₁) (x : A) : (y : A) → Type₁ where
   refl : Id A x x
 
 -- Prop is impredicative...
@@ -22,17 +22,17 @@ propAllEquals : (A : Prop) (x : A) (y : A) -> Id A x y
 propAllEquals A x y = refl {A} {x}
 
 -- We can define the proprositional truncation of a type A...
-data (unsquash) Squash (A : Type₀) : Prop where
+data Squash (A : Type₀) : Prop where
   intro : (x : A) → Squash A
 
 -- like bool
-data (if) Bool : Type₀ where
+data Bool : Type₀ where
   true  : Bool
   false : Bool
 
 -- this is an instance of propAllEquals, oh well
 propEquals : Id (Squash Bool) (intro true) (intro false)
-propEquals = refl {_} {intro true}
+propEquals = refl
 
 -- We can't get the bool out:
 --
@@ -48,4 +48,4 @@ propEquals = refl {_} {intro true}
 
 -- the parser errors without this def
 -- (lol)
-data (absurd) bottom : Type₀ where
+data bottom : Type₀ where

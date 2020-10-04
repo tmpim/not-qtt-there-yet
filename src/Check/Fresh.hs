@@ -15,6 +15,9 @@ class Fresh a where
   freshWithHint :: MonadIO m => String -> m a
   freshWithHint = const fresh
 
+  derive :: String -> a -> a
+  derive _ = id
+
 instance Fresh Int where
   {-# NOINLINE fresh #-}
   fresh = do
@@ -26,6 +29,7 @@ instance (a ~ Char) => Fresh [a] where
   fresh = fmap show (fresh @Int)
   refresh s = ((s ++) . show) <$> (fresh @Int)
   freshWithHint s = ((s ++) . show) <$> (fresh @Int)
+  derive x n = n ++ x
 
 {-# NOINLINE counter #-}
 counter :: IORef Int

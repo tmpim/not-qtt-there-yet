@@ -49,8 +49,9 @@ data Meta a
   = MV { metaId :: a
        , metaSlot :: MVar (Term a)
        , metaBlockedEqns :: MVar (Seq (Constraint a))
-       , metaLocation :: Range
-       , metaExpected :: Value a
+       , metaLocation    :: Range
+       , metaExpected    :: Value a
+       , metaTelescope   :: [Binder Value a]
        }
   deriving (Eq)
 
