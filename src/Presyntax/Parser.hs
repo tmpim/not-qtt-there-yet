@@ -23,21 +23,8 @@ loc k = do
 var :: Parser Var
 var = Intro <$> identifier
 
-set :: Parser Int
-set =
-  lexeme $ do
-    _ <- string "Type"
-    (char '{' *> normalscript <* char '}') <|> subscript
-  where
-    normalscript = fromInteger <$> lexeme decimal
-    subscriptDigit =
-      foldl (<|>) empty
-        (zipWith (\l c -> l <$ char c) [0..9] ['₀'..'₉'])
-      <?> "unicode subscript digit"
-    subscript = foldl' (\c x -> c * 10 + x) 0 <$> some subscriptDigit
-
 atom, expr, expr0 :: Parser (ExprL Var)
-atom = loc (Set <$> set)
+atom = loc (Set <$ symbol "Type")
    <|> loc (Prop <$ symbol "Prop")
    <|> loc (Var <$> var)
    <|> loc (Hole <$ symbol "_")

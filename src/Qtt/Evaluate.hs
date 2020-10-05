@@ -20,7 +20,8 @@ evaluate (Pi bind b) = do
   env <- ask
   bind <- (\d -> bind { domain = d }) <$> evaluate (domain bind)
   pure (VPi bind (\arg -> evaluateArrow b (insertDecl (var bind) arg env)))
-evaluate (Set i) = pure (VSet i)
+evaluate Set  = pure VSet
+evaluate Prop = pure VProp
 
 evaluateArrow :: (Ord a, Show a) => Term a -> Env a -> Value a
 evaluateArrow = evaluate
@@ -28,7 +29,6 @@ evaluateArrow = evaluate
 evaluateNeutral :: (MonadReader (Env a) m, Ord a, Show a) => Elim a -> m (Value a)
 evaluateNeutral (Meta mv) = pure (VNe (NMeta mv))
 evaluateNeutral (Cut a _) = evaluate a
-evaluateNeutral Prop    = pure (VNe NProp)
 evaluateNeutral (Var v) = do
   c <- lookupValue v
   case c of
@@ -60,7 +60,6 @@ zonk (VNe n) = zonkNeutral n where
     ts <- traverse zonk ts
     pure (foldl (@@) t ts)
   zonkNeutral (NVar v) = pure (VNe (NVar v))
-  zonkNeutral NProp = pure (VNe NProp)
 zonk (VPi b r) = do
   b <- fmap (\d -> b { domain = d }) $ zonk (domain b)
   pure $ VPi b (\arg -> unsafeZonkDomain (r arg))

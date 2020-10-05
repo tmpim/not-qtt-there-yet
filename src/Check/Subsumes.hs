@@ -60,11 +60,8 @@ subsumes (VNe a) (VNe b) = do
   t <- elimType a
   subsumesNe t a b
 
-subsumes (VNe NProp) (VSet j)
-  | j >= 1 = pure id
-
-subsumes (VSet i) (VSet j)
-  | i <= j = pure id
+subsumes VProp VSet = pure id
+subsumes VSet VSet  = pure id
 
 subsumes a b = typeError (NotEqual a b)
 
@@ -84,7 +81,7 @@ subsumesNe kind a b =
     sort <- sortOfKind kind
     case sort of
       -- All values in types in Prop are equal
-      VNe NProp -> pure id
+      VProp -> pure id
       _ -> go a b
   where
     go (NVar a) (NVar b) | a == b = pure id
@@ -154,12 +151,12 @@ checkScope set (Elim a) = go a where
     checkScope set a
     checkScope set b
   go Meta{} = pure ()
-  go Prop{} = pure ()
 checkScope set (Pi binder range) = do
   checkScope set (domain binder)
   checkScope (Set.insert (var binder) set) range
 checkScope set (Lam var body) = checkScope (Set.insert var set) body
 checkScope _ Set{} = pure ()
+checkScope _ Prop{} = pure ()
 
 isPattern :: Ord a => Seq (Value a) -> Maybe (Set a)
 isPattern = go mempty where
@@ -170,16 +167,17 @@ isPattern = go mempty where
   go x Seq.Empty = Just x
 
 sortOfKind :: forall a m. TypeCheck a m => Value a -> m (Value a)
-sortOfKind (VFn _ _) = pure (VSet 0)
+sortOfKind (VFn _ _) = pure VSet
 sortOfKind (VPi binder r) = do
   d <- sortOfKind (domain binder)
   r <- sortOfKind (r (valueVar (var binder)))
   case (d, r) of
-    (VNe NProp, _) -> pure (VNe NProp)
-    (_, VNe NProp) -> pure (VNe NProp)
-    (VSet a, VSet b) -> pure (VSet (max a b))
+    (VProp, _)   -> pure VProp
+    (_, VProp)   -> pure VProp
+    (VSet, VSet) -> pure VSet
     (_, _) -> undefined
-sortOfKind (VSet i) = pure (VSet (i + 1))
+sortOfKind VProp = pure VSet
+sortOfKind VSet = pure VSet
 sortOfKind (VNe a) =
   case a of
     NVar t -> do
@@ -188,8 +186,8 @@ sortOfKind (VNe a) =
         Just k -> pure k
         Nothing -> typeError (NotInScope t)
     NMeta t -> sortOfKind (metaExpected t)
-    NProp -> pure (VSet 1)
     NApp v t -> elimType (NApp v t)
+sortOfKind x = error (show x)
 
 elimType :: TypeCheck var m
          => Neutral var
@@ -210,7 +208,6 @@ elimType (NApp f xs) = do
       -- Anything else, we've screwed up
       go t (a Seq.:<| as) = error (show (NApp f xs, kind, t, a, as))
   go kind xs
-elimType NProp = pure $ VSet 1
 
 isPiType :: TypeCheck a m
          => Visibility    -- What visibility of Π do we need?
@@ -237,10 +234,10 @@ isPiType over hint t@VNe{} = do
     Just t -> pure t
     Nothing -> fresh
 
-  domain <- freshMeta (VSet maxBound)
+  domain <- freshMeta VSet
 
   assume name domain $ do
-    range <- freshMeta (VSet maxBound)
+    range <- freshMeta VSet
     let binder = Binder { var = name
                         , domain = domain
                         , visibility = over

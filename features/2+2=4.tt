@@ -1,7 +1,7 @@
-data Id (A : Type₁) (x : A) : (y : A) → Type₁ where
+data Id (A : Type) (x : A) : (y : A) → Type where
   refl : Id A x x
 
-data nat : Type₀ where
+data nat : Type where
   zero : nat
   succ : (x : nat) → nat
 

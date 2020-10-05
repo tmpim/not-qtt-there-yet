@@ -16,7 +16,7 @@ data Expr f a
   | Pi  Visibility a (f (Expr f a)) (f (Expr f a))
   | Cut (f (Expr f a)) (f (Expr f a))
   | Let a (f (Expr f a)) (f (Expr f a))
-  | Set Int
+  | Set
   | Prop
   | Hole
 

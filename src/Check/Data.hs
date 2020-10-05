@@ -289,8 +289,8 @@ getIxTele kind = do
   (tele, i) <- splitPi kind
   let l = fmap (\b -> b { domain = quote (domain b) }) tele
   case i of
-    VSet j -> pure (l, VSet j)
-    VNe NProp -> pure (l, VNe NProp)
+    VSet -> pure (l, VSet)
+    VProp -> pure (l, VProp)
     _ -> typeError (InvalidDataKind i)
 
 splitPi' :: Monad m => (var -> m var) -> Value var -> m ([Binder Value var], Value var)
@@ -314,7 +314,6 @@ dropArgs x 0 = (x, [])
 dropArgs (App f t) n = second (t:) $ dropArgs f (n - 1)
 dropArgs x@Var{} _ = (x, [])
 dropArgs x@Meta{} _ = (x, [])
-dropArgs x@Prop{} _ = (x, [])
 dropArgs x@Cut{} _ = (x, [])
 
 elimHead :: Elim var -> Elim var
