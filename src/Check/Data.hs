@@ -48,6 +48,7 @@ import Check.Monad
 
 import Qtt.Environment
 import Qtt
+import Qtt.Evaluate
 
 data Data var =
   Data { dataName :: var

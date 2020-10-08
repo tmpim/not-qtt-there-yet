@@ -69,7 +69,9 @@ expr =
 
 decl :: Parser (L (Decl L Var))
 decl =
-  loc (fmap DataStmt dataDecl) <|> do
+      loc (fmap DataStmt dataDecl)
+  <|> loc (Include <$> loc (symbol "#include" *> takeWhile1P (Just "Path name") (/= '\n')))
+  <|> do
     id <- var
     col <- optional colon
     loc $

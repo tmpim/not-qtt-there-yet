@@ -8,6 +8,7 @@ module Presyntax.Lexer
   , parens
   , braces
   , comma, colon, cutcolon, arrow, semicolon, semisemi, equals
+  , programWord', guardNotKeyword
   , identifier
   , decimal
   , cuboSpace, cuboSpaceN
@@ -63,22 +64,29 @@ equals    = symbol "="
 decimal :: Parser Integer
 decimal = lexeme L.decimal
 
-programWord :: Parser Text
-programWord = lexeme (T.cons <$> satisfy idHead <*> takeWhileP Nothing idTail) <?> "an identifier" where
+programWord' :: Parser Text
+programWord' = T.cons <$> satisfy idHead <*> takeWhileP Nothing idTail <?> "an identifier" where
   idHead :: Char -> Bool
   idHead ch = ('a' <= ch && ch <= 'z') || ('A' <= ch && ch <= 'Z')
 
-  idTail ch = (ch == '.') || ('0' <= ch && ch <= '9') || idHead ch
+  idTail ch = ('0' <= ch && ch <= '9') || idHead ch || ch == '.' || ch == '-'
+
+programWord :: Parser Text
+programWord = lexeme programWord'
 
 keywords :: HashSet Text
 keywords = HashSet.fromList ["where", "data"]
 
-identifier :: Parser Text
-identifier = do
-  x <- lookAhead programWord
+guardNotKeyword :: Text -> Parser ()
+guardNotKeyword x =
   when (x `HashSet.member` keywords) $ do
     failure (Just (Tokens (T.head x :| T.unpack (T.tail x))))
             (Set.singleton (Label ('a' :| "n identifier")))
+
+identifier :: Parser Text
+identifier = do
+  x <- lookAhead programWord
+  guardNotKeyword x
   _ <- programWord
   pure x
 

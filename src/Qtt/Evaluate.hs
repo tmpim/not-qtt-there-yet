@@ -10,41 +10,43 @@ import Qtt.Environment
 import Qtt
 import System.IO.Unsafe (unsafePerformIO)
 import Control.Monad.Reader (ReaderT(runReaderT))
+import Check.Fresh
+import Data.Hashable
 
-doEvaluate :: (MonadReader (Env a) m, Ord a, Show a) => Term a -> m (Value a)
-doEvaluate (Elim a) = doEvaluateNeutral a
-doEvaluate (Lam a b) = do
+evaluate :: (MonadReader (Env a) m, Ord a, Show a, Fresh a) => Term a -> m (Value a)
+evaluate (Elim a) = evaluateNeutral a
+evaluate (Lam a b) = do
   env <- ask
-  pure (VFn a (\arg -> doEvaluateArrow b (insertDecl a arg env)))
-doEvaluate (Pi bind b) = do
+  pure (VFn a (\arg -> evaluateArrow b (insertDecl a arg env)))
+evaluate (Pi bind b) = do
   env <- ask
-  bind <- (\d -> bind { domain = d }) <$> doEvaluate (domain bind)
-  pure (VPi bind (\arg -> doEvaluateArrow b (insertDecl (var bind) arg env)))
-doEvaluate Set  = pure VSet
-doEvaluate Prop = pure VProp
+  bind <- (\d -> bind { domain = d }) <$> evaluate (domain bind)
+  pure (VPi bind (\arg -> evaluateArrow b (insertDecl (var bind) arg env)))
+evaluate Set  = pure VSet
+evaluate Prop = pure VProp
 
-doEvaluateArrow :: (Ord a, Show a) => Term a -> Env a -> Value a
-doEvaluateArrow = doEvaluate
+evaluateArrow :: (Ord a, Show a, Fresh a) => Term a -> Env a -> Value a
+evaluateArrow = evaluate
 
-doEvaluateNeutral :: (MonadReader (Env a) m, Ord a, Show a) => Elim a -> m (Value a)
-doEvaluateNeutral (Meta mv) = pure (VNe (NMeta mv))
-doEvaluateNeutral (Cut a _) = doEvaluate a
-doEvaluateNeutral (Con v) = pure (VNe (NCon v))
-doEvaluateNeutral (Var v) = do
+evaluateNeutral :: (MonadReader (Env a) m, Ord a, Show a, Fresh a) => Elim a -> m (Value a)
+evaluateNeutral (Meta mv) = pure (VNe (NMeta mv))
+evaluateNeutral (Cut a _) = evaluate a
+evaluateNeutral (Con v) = pure (VNe (NCon v))
+evaluateNeutral (Var v) = do
   c <- lookupValue v
   case c of
     Nothing -> pure (VNe (NVar v))
     Just val -> pure val
-doEvaluateNeutral (App a b) = do
-  fun <- doEvaluateNeutral a
+evaluateNeutral (App a b) = do
+  fun <- evaluateNeutral a
   case fun of
-    VFn _ k -> k <$> doEvaluate b
+    VFn _ k -> k <$> evaluate b
     VNe n -> do
-      b <- doEvaluate b
+      b <- evaluate b
       pure (VNe n @@ b)
     _ -> error "Type error during evaluation of neutral application"
 
-zonk :: (MonadIO m, MonadReader (Env var) m, Ord var, Show var) => Value var -> m (Value var)
+zonk :: (MonadIO m, MonadReader (Env var) m, Ord var, Show var, Hashable var) => Value var -> m (Value var)
 zonk (VNe n) = zonkNeutral n where
   zonkNeutral (NApp mv@(NMeta MV{..}) ts) = do
     t <- liftIO $ tryReadMVar metaSlot
@@ -70,5 +72,5 @@ zonk (VFn v r) = do
 zonk x = pure x
 
 -- | What can I say but "Yikes".
-unsafeZonkDomain :: (Ord var, Show var) => Value var -> Value var
+unsafeZonkDomain :: (Ord var, Show var, Hashable var) => Value var -> Value var
 unsafeZonkDomain v = unsafePerformIO (runReaderT (zonk v) =<< emptyEnv mempty)

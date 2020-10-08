@@ -21,3 +21,12 @@ contractUnit u = unit.elim (λ x -> Id _ tt x) (refl {unit}) u
 
 unitContractible : contractible unit
 unitContractible = pair tt contractUnit
+
+data zero : Type where
+
+data one : Type where
+  top : one
+
+data two : Type where
+  tt : two
+  ff : two

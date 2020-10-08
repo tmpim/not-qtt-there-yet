@@ -13,11 +13,11 @@ import Control.Concurrent (putMVar, tryTakeMVar, tryReadMVar, modifyMVar_, newMV
 import Control.Monad.Except
 import Control.Monad.Reader
 
-import qualified Data.Map.Strict as Map
+import qualified Data.HashMap.Compat as Map
 import qualified Data.Sequence as Seq
-import qualified Data.Set as Set
+import qualified Data.HashSet as Set
+import Data.HashSet (HashSet)
 import Data.Sequence (Seq)
-import Data.Set (Set)
 import Data.Range
 
 import Qtt.Environment
@@ -32,12 +32,11 @@ import Driver.Query
 import Control.Monad.Trans.Control
 import Control.Monad.Base
 import Control.Exception (Exception, catch)
+
 import Type.Reflection ( Typeable )
-import Data.Hashable
-import Qtt.Evaluate
 
 type TypeCheck var m =
-  ( Fresh var, Eq var, Ord var, Show var, Hashable var, Typeable var -- var is a variable type
+  ( Fresh var, Typeable var -- var is a variable type
   , MonadReader (Env var) m
   , MonadError (TypeError var, [Range]) m
   , MonadIO m
@@ -98,7 +97,7 @@ newtype TCM var a = TCM { runChecker :: Env var -> Rock.Task (Query var) (Either
            )
     via (ReaderT (Env var) (ExceptT (TypeError var, [Range]) (Task (Query var))))
 
-getUnsolvedMetas :: TypeCheck var m => m (Set (Meta var))
+getUnsolvedMetas :: TypeCheck var m => m (HashSet (Meta var))
 getUnsolvedMetas = do
   mv <- asks unsolvedMetas
   t <- liftIO $ tryReadMVar mv
@@ -124,23 +123,10 @@ lookupVariable v = do
   t <- asks (Map.lookup v . assumptions)
   case t of
     Just ty -> pure ty
-    Nothing -> do
-      mod <- asks currentModule
-      t <- fetchTC (VariableType mod v)
-      case t of
-        Just ty -> pure ty
-        _ -> typeError (NotInScope v)
+    Nothing -> typeError (NotInScope v)
 
 isConstructor :: forall m var. TypeCheck var m => var -> m Bool
 isConstructor v = asks (Set.member v . constructors)
-
--- TODO
-
-evaluate :: TypeCheck var m => Term var -> m (Value var)
-evaluate = doEvaluate
-
-evaluateNeutral :: TypeCheck var m => Elim var -> m (Value var)
-evaluateNeutral = doEvaluateNeutral
 
 data TypeErrorException var = Tee (TypeError var) | Teer (TypeError var) [Range]
   deriving (Eq, Show, Exception)

@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -17,9 +19,10 @@ import qualified Data.Sequence as Seq
 import Data.Hashable
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as HashSet
+import GHC.Generics (Generic)
 
 data Visibility = Visible | Invisible
-  deriving (Eq, Show, Ord)
+  deriving (Eq, Show, Ord, Generic, Hashable)
 
 data Term a
   -- Both impredicative universes, with Prop : Set and Set : Set (unfortunately)
@@ -29,14 +32,14 @@ data Term a
        }
   | Lam a (Term a)
   | Elim  (Elim a)
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Generic, Hashable)
 
 data Binder t a =
   Binder { var        :: a
          , visibility :: Visibility
          , domain     :: t a
          }
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Generic, Hashable)
 
 quantify :: [Binder Term var] -> Term var -> Term var
 quantify [] t     = t
@@ -48,7 +51,7 @@ data Elim a
   | Meta (Meta a)
   | App (Elim a) (Term a)
   | Cut (Term a) (Term a)
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Generic, Hashable)
 
 data Meta a
   = MV { metaId          :: a
@@ -183,6 +186,9 @@ instance Show a => Show (Meta a) where
   
 instance Ord a => Ord (Meta a) where
   compare mv mv' = compare (metaId mv) (metaId mv')
+
+instance Hashable a => Hashable (Meta a) where
+  hashWithSalt s mv = hashWithSalt s (metaId mv)
 
 instance Ord a => Ord (Constraint a) where
   compare (Equation a _ _) (Equation b _ _) = compare a b

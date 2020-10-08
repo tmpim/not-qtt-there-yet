@@ -6,8 +6,10 @@ module Check.Subsumes where
 
 import Control.Monad.IO.Class
 
-import qualified Data.Set as Set
-import Data.Set (Set)
+import qualified Data.HashMap.Compat as Map
+import qualified Data.HashSet as Set
+import Data.HashSet (HashSet)
+import Data.Sequence (Seq)
 
 import Check.TypeError
 import Check.Monad
@@ -22,9 +24,8 @@ import Data.Foldable (for_)
 
 import Check.Fresh
 import Control.Monad.Reader (asks)
+import Data.Hashable
 
-import Data.Sequence (Seq)
-import qualified Data.Map.Strict as Map
 
 subsumes :: TypeCheck a m
          => Value a
@@ -168,7 +169,7 @@ metaHeaded (VNe (NApp (NMeta m) _)) = Just m
 metaHeaded (VNe (NMeta m)) = Just m
 metaHeaded _ = Nothing
 
-checkScope :: TypeCheck a m => Set a -> Term a -> m ()
+checkScope :: TypeCheck a m => HashSet a -> Term a -> m ()
 checkScope set (Elim a) = go a where
   go (Var v)
     | v `Set.member` set = pure ()
@@ -188,7 +189,7 @@ checkScope set (Lam var body) = checkScope (Set.insert var set) body
 checkScope _ Set{} = pure ()
 checkScope _ Prop{} = pure ()
 
-isPattern :: Ord a => Seq (Value a) -> Maybe (Set a)
+isPattern :: (Ord a, Hashable a) => Seq (Value a) -> Maybe (HashSet a)
 isPattern = go mempty where
   go x (VNe (NVar v) Seq.:<| rest)
     | v `Set.member` x = Nothing

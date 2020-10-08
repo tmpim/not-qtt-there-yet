@@ -3,9 +3,9 @@ module Check where
 
 import Control.Monad.Reader
 
-import qualified Data.Map.Strict as Map
+import qualified Data.HashMap.Strict as Map
+import qualified Data.HashSet as Set
 import qualified Data.Sequence as Seq
-import qualified Data.Set as Set
 import Data.Sequence (Seq)
 import Data.Traversable
 import Data.Foldable
@@ -20,6 +20,9 @@ import Check.Subsumes ( subsumes, isPiType )
 import Check.Monad
 import Check.Fresh
 import Check.Data
+import Qtt.Evaluate
+import Driver.Query
+import qualified Data.Text as T
 
 
 checkLoc :: TypeCheck a m => P.ExprL a -> Value a -> m (Term a)
@@ -139,14 +142,7 @@ checkDeclRaw (P.Value var dec) = do
       nf_c <- evaluate (Elim t)
       pure (declare var ty nf_c . local prove)
 
-checkDeclRaw _ = error "this is going away soon"
-
-checkDataDecl :: TypeCheck a m => P.DataDecl P.L a
-              -> m ( (a, Value a)
-                   , [(a, Value a, Value a)]
-                   , (a, Value a, Value a)
-                   )
-checkDataDecl (P.DataDecl name dataParams dataKind dataCons) =
+checkDeclRaw (P.DataStmt (P.DataDecl name dataParams dataKind dataCons)) = do
   local (\x -> x { currentlyChecking = Just name, constructors = Set.insert name (constructors x) }) $ do
   let eliminator = derive ".elim" name
 
@@ -178,10 +174,23 @@ checkDataDecl (P.DataDecl name dataParams dataKind dataCons) =
   induction <- makeInductionPrinciple the_data
   recursor <- makeRecursor eliminator the_data
 
-  pure ( (name, snd (head sorts))
-       , zipWith (\(a, b) c -> (a, b, c)) (tail sorts) fakeCons
-       , (eliminator, induction, recursor)
+  pure ( assume name (snd (head sorts))
+       . foldr (\((a, b), c) r -> declare a b c . r) id (zip (tail sorts) fakeCons)
+       . declare eliminator induction recursor
+       . local (\x -> x { toplevel     = Set.union (Set.fromList (eliminator:map fst sorts)) (toplevel x)
+                        , constructors = Set.union (Set.fromList (map fst sorts)) (constructors x) })
        )
+
+checkDeclRaw (P.Include file) = do
+  theirs <- fetchTC (ModuleEnv (T.unpack (P.lThing file)))
+  let go ours =
+        ours { assumptions  = Map.union (assumptions theirs) (assumptions ours)
+             , declarations = Map.union (declarations theirs) (declarations ours)
+             , constructors = Set.union (constructors theirs) (constructors ours)
+             , unproven     = Map.union (unproven theirs) (unproven ours)
+             , toplevel     = Set.union (toplevel theirs) (toplevel ours)
+             }
+  pure (local go)
 
 const' :: var -> Value var -> Value var
 const' x v = VFn x (const v)

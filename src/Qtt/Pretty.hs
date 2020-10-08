@@ -1,6 +1,5 @@
 module Qtt.Pretty where
 
-import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Data.Set

@@ -16,7 +16,7 @@ import Data.Range
 
 import Qtt.Environment
 
-import Data.Foldable (for_)
+import Data.Foldable (traverse_, for_)
 
 import System.Environment
 
@@ -29,14 +29,15 @@ import Presyntax
 import Check.Monad
 import Control.Exception (catch)
 import Check.TypeError (TypeError)
-import Qtt.Pretty
+import qualified Data.HashSet as HashSet
+import Qtt
+import Qtt.Pretty (prettify)
 
 
 main :: IO ()
 main =
   do
-    (mod:vs) <- getArgs
-    let files = [mod]
+    files <- getArgs
 
     memoMap <- newIORef mempty
     cycles <- newIORef mempty
@@ -44,13 +45,8 @@ main =
 
     let rules' = Rock.memoiseWithCycleDetection memoMap cycles (rules persistent files)
 
-    print =<< Rock.runTask (Rock.traceFetch (liftIO . print) (\_ _ -> pure ()) rules') (checkFile mod)
-    -- TODO: repl
-    for_ vs $ \v -> do
-      t <- Rock.runTask rules' (Rock.fetch (VariableType mod (Intro (T.pack v))))
-      case t of
-        Just t -> putStrLn $ v ++ " : " ++ show (prettify mempty t)
-        _ -> putStrLn $ "Not in scope: " ++ v
+    print =<< Rock.runTask (Rock.traceFetch (liftIO . print) (\_ _ -> pure ()) rules') (traverse_ checkFile files)
+    Rock.runTask rules' (reportUnsolved =<< Rock.fetch UnsolvedMetas)
   `catch` \case
     Tee e -> error $ "Internal error: " ++ show e
     Teer e (r:_) -> do
@@ -58,6 +54,27 @@ main =
       _ <- printRange lines r
       print (e :: TypeError Var)
     Teer e _ -> error $ "Internal error: " ++ show e
+
+reportUnsolved :: HashSet.HashSet (Meta Var) -> Rock.Task (Query Var) ()
+reportUnsolved = go . HashSet.toList where
+  go :: [Meta Var] -> Rock.Task (Query Var) ()
+  go [] = pure ()
+  go (x:xs) = do
+    let f = rangeFile (metaLocation x)
+    lines <- Rock.fetch (ModuleText f)
+    zonked <- Rock.fetch (Zonked (metaExpected x))
+
+    liftIO $ do
+      pad <- printRange lines (metaLocation x)
+
+      let dropT (Binder{Qtt.var = v}:bs) (VPi _ rng) = dropT bs (rng (valueVar v))
+          dropT [] t = t
+          dropT _ _ = undefined
+
+          metaT = dropT (metaTelescope x) zonked
+
+      putStrLn $ T.unpack pad ++ "Unsolved metavariable with type: " ++ show (prettify mempty metaT)
+    go xs
 
 reportWithLines :: (MonadReader (Env a) m, MonadIO m) => [T.Text] -> String -> m ()
 reportWithLines file s = do
@@ -70,6 +87,7 @@ reportWithLines file s = do
 
 printRange :: [T.Text] -> Range -> IO T.Text
 printRange lines r = do
+  putStrLn $ rangeFile r ++ ":" ++ show (unPos (sourceLine (rangeStart r)))
   let l = unPos $ sourceLine (rangeStart r)
       padding = T.replicate (length (show l) + 1) (T.singleton ' ')
       line = T.cons ' ' (T.pack (show l)) <> T.pack " | "

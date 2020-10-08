@@ -50,5 +50,6 @@ executable Qtt
                      , Presyntax.Parser
                      , Presyntax.Lexer
 
+                     , Data.HashMap.Compat
                      , Data.Range
   ghc-options:       -Wall -Wno-name-shadowing
