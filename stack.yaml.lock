@@ -3,7 +3,56 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/lock_files
 
-packages: []
+packages:
+- completed:
+    hackage: rock-0.3.0.0@sha256:62acd56010ea6669a7c110153c262a4b29c0dae049d3dc5028e6dd9cf20dc49f,3591
+    pantry-tree:
+      size: 535
+      sha256: a58b8c3d493b6681d5e16e91a16509668aec3c2d645533cefea18dc852302224
+  original:
+    hackage: rock-0.3.0.0@sha256:62acd56010ea6669a7c110153c262a4b29c0dae049d3dc5028e6dd9cf20dc49f,3591
+- completed:
+    hackage: constraints-extras-0.3.0.2@sha256:013b8d0392582c6ca068e226718a4fe8be8e22321cc0634f6115505bf377ad26,1853
+    pantry-tree:
+      size: 594
+      sha256: 3ce1012bfb02e4d7def9df19ce80b8cd2b472c691b25b181d9960638673fecd1
+  original:
+    hackage: constraints-extras-0.3.0.2@sha256:013b8d0392582c6ca068e226718a4fe8be8e22321cc0634f6115505bf377ad26,1853
+- completed:
+    hackage: dependent-hashmap-0.1.0.1@sha256:6d1c20bd79f32d8daebd3cc741f884cc3d093118e3b876eb957defd4c594a966,1892
+    pantry-tree:
+      size: 334
+      sha256: 817b36b81735d96696c5b165357c431e0b396dcf45afb8b4384fbfd4f4499cbb
+  original:
+    hackage: dependent-hashmap-0.1.0.1@sha256:6d1c20bd79f32d8daebd3cc741f884cc3d093118e3b876eb957defd4c594a966,1892
+- completed:
+    hackage: dependent-sum-0.7.1.0@sha256:5599aa89637db434431b1dd3fa7c34bc3d565ee44f0519bfbc877be1927c2531,2068
+    pantry-tree:
+      size: 290
+      sha256: 9cbfb32b5a8a782b7a1c941803fd517633cb699159b851c1d82267a9e9391b50
+  original:
+    hackage: dependent-sum-0.7.1.0@sha256:5599aa89637db434431b1dd3fa7c34bc3d565ee44f0519bfbc877be1927c2531,2068
+- completed:
+    hackage: dependent-sum-template-0.1.0.3@sha256:0bbbacdfbd3abf2a15aaf0cf2c27e5bdd159b519441fec39e1e6f2f54424adde,1682
+    pantry-tree:
+      size: 436
+      sha256: 32eeadeb991a290a1da41ce7e995dee7d38ebba3bd3e53ea8074c32c086701fd
+  original:
+    hackage: dependent-sum-template-0.1.0.3@sha256:0bbbacdfbd3abf2a15aaf0cf2c27e5bdd159b519441fec39e1e6f2f54424adde,1682
+- completed:
+    hackage: haskell-lsp-0.23.0.0@sha256:b782cb24ca62510f4eb698f778f7e6dac6419a5ac8fb8dc67bdffe4ae04ae42d,5315
+    pantry-tree:
+      size: 1728
+      sha256: 6b771d8621ab5f32e40e9afce84adda3d23b7fc2996400086a71f93a5e14a197
+  original:
+    hackage: haskell-lsp-0.23.0.0
+- completed:
+    hackage: haskell-lsp-types-0.23.0.0@sha256:b15d9c2aff8b8145797f5fa6771910b986d2456eccb30c3de69b75d4768cd12d,3027
+    pantry-tree:
+      size: 2531
+      sha256: 05b1b98ac79e2dee2d7893c30a8c47d21d4db2e099c07dcbd5d642ff54be30ef
+  original:
+    hackage: haskell-lsp-types-0.23.0.0@sha256:b15d9c2aff8b8145797f5fa6771910b986d2456eccb30c3de69b75d4768cd12d,3027
 snapshots:
 - completed:
     size: 532382

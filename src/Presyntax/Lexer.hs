@@ -8,6 +8,7 @@ module Presyntax.Lexer
   , parens
   , braces
   , comma, colon, cutcolon, arrow, semicolon, semisemi, equals
+  , programWord', guardNotKeyword
   , identifier
   , decimal
   , cuboSpace, cuboSpaceN
@@ -15,22 +16,22 @@ module Presyntax.Lexer
   , ParseException(..)
   ) where
 
-import qualified Text.Megaparsec.Char.Lexer as L
-import Text.Megaparsec.Char as P
-import Text.Megaparsec as P
+import Control.Exception (Exception(..))
+import Control.Monad (when)
 
+import Data.List.NonEmpty (NonEmpty((:|)))
 import qualified Data.HashSet as HashSet
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import Data.List.NonEmpty (NonEmpty((:|)))
 import Data.HashSet (HashSet)
+import Data.Coerce (coerce)
+import Data.Char (isSpace)
 import Data.Text (Text)
 import Data.Void (Void)
 
-import Control.Monad (when)
-import Control.Exception (Exception(..))
-import Data.Coerce (coerce)
-import Data.Char (isSpace)
+import qualified Text.Megaparsec.Char.Lexer as L
+import Text.Megaparsec.Char as P
+import Text.Megaparsec as P
 
 type Parser = Parsec Void Text
 
@@ -63,22 +64,29 @@ equals    = symbol "="
 decimal :: Parser Integer
 decimal = lexeme L.decimal
 
-programWord :: Parser Text
-programWord = lexeme (T.cons <$> satisfy idHead <*> takeWhileP Nothing idTail) <?> "an identifier" where
+programWord' :: Parser Text
+programWord' = T.cons <$> satisfy idHead <*> takeWhileP Nothing idTail <?> "an identifier" where
   idHead :: Char -> Bool
   idHead ch = ('a' <= ch && ch <= 'z') || ('A' <= ch && ch <= 'Z')
 
-  idTail ch = (ch == '.') || ('0' <= ch && ch <= '9') || idHead ch
+  idTail ch = ('0' <= ch && ch <= '9') || idHead ch || ch == '.' || ch == '-'
+
+programWord :: Parser Text
+programWord = lexeme programWord'
 
 keywords :: HashSet Text
 keywords = HashSet.fromList ["where", "data"]
 
-identifier :: Parser Text
-identifier = do
-  x <- lookAhead programWord
+guardNotKeyword :: Text -> Parser ()
+guardNotKeyword x =
   when (x `HashSet.member` keywords) $ do
     failure (Just (Tokens (T.head x :| T.unpack (T.tail x))))
             (Set.singleton (Label ('a' :| "n identifier")))
+
+identifier :: Parser Text
+identifier = do
+  x <- lookAhead programWord
+  guardNotKeyword x
   _ <- programWord
   pure x
 

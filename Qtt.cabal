@@ -17,11 +17,53 @@ executable Qtt
   hs-source-dirs:      src
   main-is:             Main.hs
   default-language:    Haskell2010
-  build-depends:       base >= 4.7 && < 5
-                     , mtl, transformers, containers, megaparsec, text, unordered-containers, hashable
-  other-modules:       Qtt.Environment
+  build-depends:  
+      -- Standard library
+      base                   >= 4.7  && < 5
+    , mtl                    >= 2.2  && < 2.3
+    , stm                    >= 2.5  && < 2.6
+    , text                   >= 1.2  && < 1.3
+    , lens                   >= 4.18 && < 4.19
+    , aeson                  >= 1.4 && < 1.5
+    , comonad                >= 5.0 && < 5.1
+    , hashable               >= 1.3 && < 1.4
+    , containers             >= 0.6 && < 0.7
+    , transformers           >= 0.5 && < 0.6
+    , unordered-containers   >= 0.2 && < 0.3
+
+      -- * IO-like monads
+    , monad-control          >= 1.0 && < 1.1
+    , transformers-base      >= 0.4 && < 0.5
+
+      -- * Parsing
+    , megaparsec             >= 8.0 && < 8.1
+
+      -- * Query-driven compilation
+    , rock                   >= 0.3  && < 0.4
+        -- ^ Query-driven compiler driver
+    , some                   >= 1.0  && < 1.1
+        -- ^ Generalised existential
+    , constraints            >= 0.12 && < 0.13
+        -- ^ Higher-order constraint combinators
+    , data-default           >= 0.7 && < 0.8
+        -- ^ Cursed typeclass
+    , dependent-hashmap      >= 0.1 && < 0.2
+        -- ^ GADT-indexed hashmap (partial dependent product)
+    , constraints-extras     >= 0.3 && < 0.4
+        -- ^ Lifted Eq, Ord etc
+
+      -- * Language Server
+    , fingertree             >= 0.1.4 && < 0.2
+        -- ^ Efficient interval maps
+    , haskell-lsp            >= 0.23 && < 0.24
+    , haskell-lsp-types      >= 0.23 && < 0.24
+        -- ^ LSP support
+
+  other-modules:       Qtt
+                     , Qtt.Pretty
+                     , Qtt.Builtin
                      , Qtt.Evaluate
-                     , Qtt
+                     , Qtt.Environment
 
                      , Check.TypeError
                      , Check.Subsumes
@@ -30,9 +72,21 @@ executable Qtt
                      , Check.Data
                      , Check
 
-                     , Presyntax
-                     , Presyntax.Parser
-                     , Presyntax.Lexer
+                     , Control.Concurrent.IO
 
+                     , Driver.Query
+                     , Driver.Rules
+                     , Driver.WiredIn
+                     , Driver.Editor.Main
+                     , Driver.Editor.Monad
+                     , Driver.Editor.Refine
+
+                     , Presyntax
+                     , Presyntax.Lexer
+                     , Presyntax.Parser
+                     , Presyntax.Context
+
+                     , Data.L
                      , Data.Range
+                     , Data.HashMap.Compat
   ghc-options:       -Wall -Wno-name-shadowing

@@ -1,0 +1,43 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Quantitative Type Theory",
+	"patterns": [
+		{
+			"include": "#keywords"
+		},
+		{
+			"include": "#types"
+		}
+	],
+	"repository": {
+		"keywords": {
+			"patterns": [
+				{
+					"name": "keyword.data.qtt",
+					"match": "\\b(data|where)\\b"
+				},
+				{
+					"name": "keyword.function.qtt",
+					"match": "(λ|\\\\)"
+				},
+				{
+					"name": "keyword.arrow.qtt",
+					"match": "(→|->|:|=)"
+				},
+				{
+					"name": "keyword.hole.qtt",
+					"match": "\\b_\\b"
+				}
+			]
+		},
+		"types": {
+			"patterns": [
+				{
+					"name": "constants.sort.qtt",
+					"match": "\\b(Type|Prop)\\b"
+				}
+			]
+		}
+	},
+	"scopeName": "source.tt"
+}

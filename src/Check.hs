@@ -1,30 +1,38 @@
 {-# LANGUAGE FlexibleContexts #-}
 module Check where
 
+import Check.Subsumes ( subsumes, isPiType )
+import Check.TypeError ( TypeError(..) )
+import Check.Fresh
+import Check.Monad
+import Check.Data
+
 import Control.Monad.Reader
 
+import qualified Data.HashMap.Strict as Map
+import qualified Data.Sequence as Seq
+import qualified Data.HashSet as Set
+import qualified Data.Text as T
+import qualified Data.L as P
+import Data.Sequence (Seq)
 import Data.Traversable
 import Data.Foldable
 
+import Driver.Query
+
 import qualified Presyntax as P
+import Presyntax.Context
 
 import Qtt.Environment
 import Qtt.Evaluate
 import Qtt
 
-import Check.TypeError ( TypeError(..) )
-import Check.Subsumes ( subsumes, isPiType )
-import Check.Monad
-import Check.Fresh
-import Check.Data
 
-import qualified Data.Map.Strict as Map
-import qualified Data.Set as Set
-import Data.Sequence (Seq)
-import qualified Data.Sequence as Seq
 
 checkLoc :: TypeCheck a m => P.ExprL a -> Value a -> m (Term a)
-checkLoc t v = withLocation t $ \ex -> checkRaw ex v
+checkLoc t v = withLocation t $ \ex -> do
+  attachTypeToLoc v
+  checkRaw ex v
 
 checkRaw :: TypeCheck a m => P.Expr P.L a -> Value a -> m (Term a)
 checkRaw v (VPi b@Binder{visibility=Invisible} rng) | not (implicitLam v)
@@ -45,8 +53,9 @@ checkRaw P.Set value = do
 checkRaw (P.Lam vis var body) term = do
   (dom, range, _wp) <- isPiType vis (Just var) term
   term <-
-    assume var dom $
-      checkLoc body (range (valueVar var))
+    inContext BodyContext $
+      assume var dom $
+        checkLoc body (range (valueVar var))
   pure (Lam var term)
 
 checkRaw (P.Pi vis var domain range) i = do
@@ -57,7 +66,7 @@ checkRaw (P.Pi vis var domain range) i = do
   term <- checkLoc domain dr
   domain <- evaluate term
   assume var domain $ do
-    range <- checkLoc range dr
+    range <- inContext BodyContext $ checkLoc range dr
     pure (Pi (Binder var vis term) range)
 
 checkRaw P.Hole ty = do
@@ -75,19 +84,20 @@ checkRaw exp expected = do
   pure (quote (w nf))
 
 inferLoc :: TypeCheck a m => P.ExprL a -> m (Elim a, Value a)
-inferLoc ex = withLocation ex inferRaw
+inferLoc ex = withLocation ex $ \ex -> do
+  (elim, t) <- inferRaw ex
+  attachTypeToLoc t
+  pure (elim, t)
 
 inferRaw :: TypeCheck a m => P.Expr P.L a -> m (Elim a, Value a)
 inferRaw (P.Var a) = do
-  t <- lookupType a
-  case t of
-    Just ty -> pure (Var a, ty)
-    Nothing -> typeError (NotInScope a)
+  isc <- isConstructor a
+  (,) (if isc then Con a else Var a) <$> lookupVariable a
 
 inferRaw (P.App t a b) = do
-  (elimA, tyA) <- inferLoc a
+  (elimA, tyA) <- inContext FunctionContext $ inferLoc a
   (dom, range, wp) <- isPiType t Nothing tyA
-  termB <- checkLoc b dom
+  termB <- inContext ArgumentContext $ checkLoc b dom
   nfB <- evaluate termB
   pure (wp elimA `App` termB, range nfB)
   
@@ -122,8 +132,9 @@ checkDeclLoc = flip withLocation checkDeclRaw
 
 checkDeclRaw :: TypeCheck var m => P.Decl P.L var -> m (m b -> m b)
 checkDeclRaw (P.TypeSig var ty) = do
-  c <- checkLoc ty VSet
-  nf_c <- evaluate c
+  nf_c <- recover VSet $ do
+    c <- checkLoc ty VSet
+    evaluate c
   pure ( assume var nf_c
        . local (\x -> x { unproven = Map.insert var (P.L () (P.lRange ty)) (unproven x)
                         , toplevel = Set.insert var (toplevel x) }))
@@ -134,7 +145,7 @@ checkDeclRaw (P.Value var dec) = do
   ty <- lookupType var
   case ty of
     Just sig -> do
-      c <- checkLoc dec sig
+      c <- recoverQ sig $ checkLoc dec sig
       nf_c <- evaluate c
       pure (local (insertDecl var nf_c . prove))
     Nothing -> do
@@ -142,40 +153,55 @@ checkDeclRaw (P.Value var dec) = do
       nf_c <- evaluate (Elim t)
       pure (declare var ty nf_c . local prove)
 
-checkDeclRaw (P.DataDecl name dataParams dataKind constructors) = do
-  let eliminator = derive ".elim" name
+checkDeclRaw (P.DataStmt (P.DataDecl name dataParams dataKind dataCons)) = do
+  local (\x -> x { currentlyChecking = Just name, constructors = Set.insert name (constructors x) }) $ do
+    let eliminator = derive ".elim" name
 
-  params <- checkTelescope dataParams . flip withLocation $ \(name, sort) -> do
-    sort <- checkLoc sort VSet
-    sort_nf <- evaluate sort
-    pure (name, sort_nf)
-  let param_pi_tel v = fmap (\(a, b) -> Binder a v (quote b)) params
+    params <- checkTelescope dataParams . flip withLocation $ \(name, sort) -> do
+      sort <- checkLoc sort VSet
+      sort_nf <- evaluate sort
+      pure (name, sort_nf)
 
-  (sorts, the_data) <- assuming params $ do
-    kind <- checkLoc dataKind VSet
-    kind_nf <- evaluate kind
-    closed <- evaluate (quantify (param_pi_tel Visible) kind)
+    let param_pi_tel v = fmap (\(a, b) -> Binder a v (quote b)) params
 
-    constrs <- assume name closed $ do
-      for constructors . flip withLocation $ \(name, sort) -> do
-        sort <- checkLoc sort VSet
-        sort_nf <- evaluate sort
-        pure (name, sort, sort_nf)
-    
-    visibleSorts <- traverse (\(a, b, _) -> (,) a <$> evaluate (quantify (param_pi_tel Invisible) b)) constrs
-    pure ((name, closed):visibleSorts, Data name params kind_nf (map (\(a, _, b) -> (a, b)) constrs))
+    (sorts, the_data) <- assuming params $ do
+      kind <- checkLoc dataKind VSet
+      kind_nf <- evaluate kind
+      closed <- evaluate (quantify (param_pi_tel Visible) kind)
 
-  fakeCons <- for constructors . flip withLocation $ \(name, _) -> do
-    ignored <- refresh name
-    pure (constN ignored (length params) (valueVar name))
+      constrs <- assume name closed . local (\x -> x { constructors = Set.insert name (constructors x)}) $ do
+        for dataCons . flip withLocation $ \(name, sort) -> do
+          sort <- checkLoc sort VSet
+          sort_nf <- evaluate sort
+          pure (name, sort, sort_nf)
+      
+      visibleSorts <- traverse (\(a, b, _) -> (,) a <$> evaluate (quantify (param_pi_tel Invisible) b)) constrs
+      pure ((name, closed):visibleSorts, Data name params kind_nf (map (\(a, _, b) -> (a, b)) constrs))
 
-  induction <- makeInductionPrinciple the_data
-  recursor <- makeRecursor eliminator the_data
+    fakeCons <- for dataCons . flip withLocation $ \(name, _) -> do
+      ignored <- refresh name
+      pure (constN ignored (length params) (VNe (NCon name)))
 
-  pure ( assume name (snd (head sorts))
-       . foldr (\((a, b), c) r -> declare a b c . r) id (zip (tail sorts) fakeCons)
-       . declare eliminator induction recursor
-       . local (\x -> x { toplevel = Set.union (Set.fromList (eliminator:map fst sorts)) (toplevel x) }))
+    induction <- makeInductionPrinciple the_data
+    recursor <- makeRecursor eliminator the_data
+
+    pure ( assume name (snd (head sorts))
+        . foldr (\((a, b), c) r -> declare a b c . r) id (zip (tail sorts) fakeCons)
+        . declare eliminator induction recursor
+        . local (\x -> x { toplevel     = Set.union (Set.fromList (eliminator:map fst sorts)) (toplevel x)
+                         , constructors = Set.union (Set.fromList (map fst sorts)) (constructors x) })
+        )
+
+checkDeclRaw (P.Include file) = do
+  theirs <- fetchTC (ModuleEnv (T.unpack (P.lThing file)))
+  let go ours =
+        ours { assumptions  = Map.union (assumptions theirs) (assumptions ours)
+             , declarations = Map.union (declarations theirs) (declarations ours)
+             , constructors = Set.union (constructors theirs) (constructors ours)
+             , unproven     = Map.union (unproven theirs) (unproven ours)
+             , toplevel     = Set.union (toplevel theirs) (toplevel ours)
+             }
+  pure (local go)
 
 const' :: var -> Value var -> Value var
 const' x v = VFn x (const v)
@@ -197,7 +223,6 @@ checkProgram [] kont = do
   unless (Map.null unp) $ do
     for_ (Map.toList unp) $ \(m, loc) -> do
       withLocation loc $ \() -> typeError (Undefined m)
-
   kont
 checkProgram (d:ds) kont = flip id (checkProgram ds kont) =<< checkDeclLoc d
 

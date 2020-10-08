@@ -1,40 +1,40 @@
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveAnyClass #-}
 module Check.TypeError where
+
+import Data.List (intercalate)
+import Data.Hashable
+
+import GHC.Generics (Generic)
 
 import Qtt (Visibility(..), Term, Elim, quote, Meta, Value)
 
-import Presyntax (ExprL)
-import Data.List (intercalate)
 
 data TypeError a
   = NotInScope a
+  | NoBuiltin String
   | NotEqual (Value a) (Value a)
   | NotPi Visibility (Value a)
   | NotSet (Value a)
-  | CanNotInfer (ExprL a)
-  | NotMillerPattern (Meta a) [Value a] (Value a)
   | Timing (TypeError a) (Timing a)
   | InvalidDataKind (Value a)
   | WrongDataReturn (Elim a) (Term a)
   | TypeTooBig Int Int
   | Undefined a
   | NonWellFounded a Int (Value a)
-  deriving (Eq)
+  deriving (Eq, Generic, Hashable)
 
 data Timing a
   = WhenSolving (Meta a) [Value a] (Value a)
-  deriving (Eq)
+  deriving (Eq, Generic, Hashable)
 
 instance (Show a, Eq a) => Show (TypeError a) where
   show (NotInScope a) = "Variable not in scope: " ++ show a
+  show (NoBuiltin s) = "No binding for builtin " ++ show s
   show (NotPi Invisible v) = "Type is not a function type: " ++ show (quote v)
   show (NotPi Visible v) = "Type is not an invisible function type: " ++ show (quote v)
   show (NotSet v) = "Type is not a universe type: " ++ show (quote v)
   show (NotEqual a b) = "Types " ++ show (quote a) ++ " and " ++ show (quote b) ++ " are not equal."
-  show (CanNotInfer e) = "Can not infer kind for type " ++ show e
-  show (NotMillerPattern mv spine val) =
-       "Equation "
-    ++ show mv ++ " " ++ intercalate " " (map (show . quote) spine) ++ " ≡ " ++ show (quote val)
-    ++ " is not in Miller pattern form"
   show (TypeTooBig i j) = "Type with universe " ++ show i ++ " is too big to fit in universe Type " ++ show j
   show (Undefined a) = "The name " ++ show a ++ " was declared, but no definition was given"
   show (InvalidDataKind k) = "The kind " ++ show k ++ " is not valid as the return kind of a data declaration"

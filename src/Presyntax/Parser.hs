@@ -2,16 +2,19 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Presyntax.Parser where
 
+import Control.Exception (throwIO)
+
+import Data.Text (Text)
 import Data.Range
+import Data.L
 
 import Presyntax.Lexer
 import Presyntax
-import Data.Text (Text)
-import Data.Foldable
-import Control.Exception (throwIO)
-import qualified Text.Megaparsec.Char.Lexer as L
 
 import Qtt (Visibility(..))
+
+import qualified Text.Megaparsec.Char.Lexer as L
+
 
 loc :: Parser a -> Parser (L a)
 loc k = do
@@ -70,7 +73,9 @@ expr =
 
 decl :: Parser (L (Decl L Var))
 decl =
-  dataDecl <|> do
+      loc (fmap DataStmt dataDecl)
+  <|> loc (Include <$> loc (symbol "#include" *> takeWhile1P (Just "Path name") (/= '\n')))
+  <|> do
     id <- var
     col <- optional colon
     loc $
@@ -87,8 +92,8 @@ decl =
         Just _ -> expr
     arg = ((,) Visible <$> identifier) <|> ((,) Invisible <$> braces identifier)
 
-dataDecl :: Parser (L (Decl L Var))
-dataDecl = loc $ L.indentBlock cuboSpaceN parseHeader where
+dataDecl :: Parser (DataDecl L Var)
+dataDecl = L.indentBlock cuboSpaceN parseHeader where
   parseHeader = do
     _ <- symbol "data"
     name <- var

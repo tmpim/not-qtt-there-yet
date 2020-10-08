@@ -31,8 +31,13 @@ and its definition is entirely implied by its type.)
 -}
 module Check.Data where
 
-import Control.Monad.Identity ( Identity(runIdentity) )
+import Check.TypeError
+import Check.Subsumes
+import Check.Fresh
+import Check.Monad
+
 import Control.Monad.Except (catchError, MonadError(throwError))
+import Control.Monad.Identity ( Identity(runIdentity) )
 import Control.Arrow
 
 import qualified Data.Map.Strict as Map
@@ -41,14 +46,10 @@ import Data.Sequence (Seq)
 import Data.Traversable
 import Data.Foldable
 
-import Check.Subsumes
-import Check.TypeError
-import Check.Fresh
-import Check.Monad
-
 import Qtt.Environment
 import Qtt.Evaluate
 import Qtt
+
 
 data Data var =
   Data { dataName :: var
@@ -87,7 +88,7 @@ makeInductionPrinciple Data{..} =
     the_datum <- freshWithHint "it"
 
     (ixes, sort) <- getIxTele dataKind
-    let datum = appToTele (Var dataName) (args_tele ++ ixes)
+    let datum = appToTele (Con dataName) (args_tele ++ ixes)
         datum :: Elim var
 
     let motiveSort = quantify ixes $ Pi (Binder the_datum Visible (Elim datum)) (quote sort)
@@ -95,7 +96,7 @@ makeInductionPrinciple Data{..} =
         motiveT = Binder motive Visible motiveSort
 
     let check = assume dataName dataSort
-              . mkCheck (length ixes) (appToTele (Var dataName) args_tele)
+              . mkCheck (length ixes) (appToTele (Con dataName) args_tele)
     cases <- traverse (makeConCase (length ixes) check motive) dataCons
 
     evaluate (quantify (map invisCloak args_tele
@@ -115,7 +116,7 @@ makeInductionPrinciple Data{..} =
     --    the constructor name, and the constructor's kind
     makeConCase ixC checkKind motive (con, kind) = do
       (tele, ret) <- splitPi kind
-      let con_appd = appToTele (Var con) (fmap (\b -> b { domain = quote (domain b) }) tele)
+      let con_appd = appToTele (Con con) (fmap (\b -> b { domain = quote (domain b) }) tele)
           tele' = fmap (\b -> b { domain = quote (domain b)}) tele
 
       ixes <- checkKind (quote ret)
@@ -150,7 +151,7 @@ makeInductionPrinciple Data{..} =
 
     -- x : Y Ξ τs:
     getInductives ixC (Binder{ var = v, domain = VNe t' }:rst)
-      | elimHead t == Var dataName =      -- Y ≡ X. Strictly speaking we should check the indices line up here
+      | elimHead t == Con dataName =      -- Y ≡ X. Strictly speaking we should check the indices line up here
           let (_, here_ixes) = dropArgs t ixC
            in ((v, here_ixes, id, Var v):) <$> getInductives ixC rst
       | otherwise = getInductives ixC rst -- ¬(Y ≡ X); This variable doesn't get induced over
@@ -161,11 +162,11 @@ makeInductionPrinciple Data{..} =
       -- Where Y ≡ X,
       -- build an induction hypothesis of the form 
       -- Π Δ', P (f Δ')
-      | Elim t <- t, elimHead t == Var dataName = do
+      | Elim t <- t, elimHead t == Con dataName = do
         -- if X appears (saturated) in Δ, we should reject it..
         for_ (zip [1..] (fst (splitPi_pure ty))) $ \(i, domain -> t) ->
           case t of
-            VNe n | elimHead (quoteNeutral n) == Var dataName ->
+            VNe n | elimHead (quoteNeutral n) == Con dataName ->
               typeError (NonWellFounded (error "empty NonWellFounded variable (getInductives outside of mkConCase?)") i t)
             _ -> pure ()
         let (_, here_ixes) = dropArgs t ixC
@@ -238,8 +239,8 @@ makeRecursor name Data{..} =
     isCon :: Map.Map var (Int, Seq (Value var) -> [Value var] -> Seq (Value var))
           -> Value var
           -> Maybe ((Int, Seq (Value var) -> [Value var] -> Seq (Value var)), Seq (Value var))
-    isCon cases (VNe (NApp (NVar x) args)) = flip (,) args <$> Map.lookup x cases
-    isCon cases (VNe (NVar x)) = flip (,) mempty <$> Map.lookup x cases
+    isCon cases (VNe (NApp (NCon x) args)) = flip (,) args <$> Map.lookup x cases
+    isCon cases (VNe (NCon x)) = flip (,) mempty <$> Map.lookup x cases
     isCon _ _ = Nothing
 
     -- Build the individual eliminator for each case, given:
@@ -257,7 +258,7 @@ makeRecursor name Data{..} =
 
     -- a : Y Δ' τ
     goForCase recursor ((domain -> VNe t'):rst) (arg Seq.:<| args) extraArgs
-      | elimHead (quoteNeutral t') == Var dataName
+      | elimHead (quoteNeutral t') == Con dataName
       -- Y ≡ X, recur
       = (foldl (@@) recursor extraArgs) @@ arg Seq.:<| goForCase recursor rst args extraArgs
       -- ← (Y ≡ X), ignore
@@ -266,7 +267,7 @@ makeRecursor name Data{..} =
     -- f : Π Ξ, Y Δ' τ
     goForCase recursor ((domain -> ty@VPi{}):rst) (argf Seq.:<| args) extraArgs
       -- Y ≡ X, build λ Ξ → recursor (f Ξ) (i.e., recursor . f, but polymorphic over a telescope)
-      | Elim t <- t, elimHead t == Var dataName =
+      | Elim t <- t, elimHead t == Con dataName =
          makeFun recursor (fst (splitPi_pure ty)) argf Seq.:<| goForCase recursor rst args extraArgs
       -- ¬ (Y ≡ X), pass along
       | otherwise = goForCase recursor rst args extraArgs
@@ -313,6 +314,7 @@ dropArgs :: Elim var -> Int -> (Elim var, [Term var])
 dropArgs x 0 = (x, [])
 dropArgs (App f t) n = second (t:) $ dropArgs f (n - 1)
 dropArgs x@Var{} _ = (x, [])
+dropArgs x@Con{} _ = (x, [])
 dropArgs x@Meta{} _ = (x, [])
 dropArgs x@Cut{} _ = (x, [])
 
