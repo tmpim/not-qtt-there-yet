@@ -3,13 +3,16 @@ module Check where
 
 import Control.Monad.Reader
 
+import qualified Data.Map.Strict as Map
+import qualified Data.Sequence as Seq
+import qualified Data.Set as Set
+import Data.Sequence (Seq)
 import Data.Traversable
 import Data.Foldable
 
 import qualified Presyntax as P
 
 import Qtt.Environment
-import Qtt.Evaluate
 import Qtt
 
 import Check.TypeError ( TypeError(..) )
@@ -18,10 +21,6 @@ import Check.Monad
 import Check.Fresh
 import Check.Data
 
-import qualified Data.Map.Strict as Map
-import qualified Data.Set as Set
-import Data.Sequence (Seq)
-import qualified Data.Sequence as Seq
 
 checkLoc :: TypeCheck a m => P.ExprL a -> Value a -> m (Term a)
 checkLoc t v = withLocation t $ \ex -> checkRaw ex v
@@ -79,10 +78,8 @@ inferLoc ex = withLocation ex inferRaw
 
 inferRaw :: TypeCheck a m => P.Expr P.L a -> m (Elim a, Value a)
 inferRaw (P.Var a) = do
-  t <- lookupType a
-  case t of
-    Just ty -> pure (Var a, ty)
-    Nothing -> typeError (NotInScope a)
+  isc <- isConstructor a
+  (,) (if isc then Con a else Var a) <$> lookupVariable a
 
 inferRaw (P.App t a b) = do
   (elimA, tyA) <- inferLoc a
@@ -142,13 +139,22 @@ checkDeclRaw (P.Value var dec) = do
       nf_c <- evaluate (Elim t)
       pure (declare var ty nf_c . local prove)
 
-checkDeclRaw (P.DataDecl name dataParams dataKind constructors) = do
+checkDeclRaw _ = error "this is going away soon"
+
+checkDataDecl :: TypeCheck a m => P.DataDecl P.L a
+              -> m ( (a, Value a)
+                   , [(a, Value a, Value a)]
+                   , (a, Value a, Value a)
+                   )
+checkDataDecl (P.DataDecl name dataParams dataKind dataCons) =
+  local (\x -> x { currentlyChecking = Just name, constructors = Set.insert name (constructors x) }) $ do
   let eliminator = derive ".elim" name
 
   params <- checkTelescope dataParams . flip withLocation $ \(name, sort) -> do
     sort <- checkLoc sort VSet
     sort_nf <- evaluate sort
     pure (name, sort_nf)
+
   let param_pi_tel v = fmap (\(a, b) -> Binder a v (quote b)) params
 
   (sorts, the_data) <- assuming params $ do
@@ -156,8 +162,8 @@ checkDeclRaw (P.DataDecl name dataParams dataKind constructors) = do
     kind_nf <- evaluate kind
     closed <- evaluate (quantify (param_pi_tel Visible) kind)
 
-    constrs <- assume name closed $ do
-      for constructors . flip withLocation $ \(name, sort) -> do
+    constrs <- assume name closed . local (\x -> x { constructors = Set.insert name (constructors x)}) $ do
+      for dataCons . flip withLocation $ \(name, sort) -> do
         sort <- checkLoc sort VSet
         sort_nf <- evaluate sort
         pure (name, sort, sort_nf)
@@ -165,17 +171,17 @@ checkDeclRaw (P.DataDecl name dataParams dataKind constructors) = do
     visibleSorts <- traverse (\(a, b, _) -> (,) a <$> evaluate (quantify (param_pi_tel Invisible) b)) constrs
     pure ((name, closed):visibleSorts, Data name params kind_nf (map (\(a, _, b) -> (a, b)) constrs))
 
-  fakeCons <- for constructors . flip withLocation $ \(name, _) -> do
+  fakeCons <- for dataCons . flip withLocation $ \(name, _) -> do
     ignored <- refresh name
-    pure (constN ignored (length params) (valueVar name))
+    pure (constN ignored (length params) (VNe (NCon name)))
 
   induction <- makeInductionPrinciple the_data
   recursor <- makeRecursor eliminator the_data
 
-  pure ( assume name (snd (head sorts))
-       . foldr (\((a, b), c) r -> declare a b c . r) id (zip (tail sorts) fakeCons)
-       . declare eliminator induction recursor
-       . local (\x -> x { toplevel = Set.union (Set.fromList (eliminator:map fst sorts)) (toplevel x) }))
+  pure ( (name, snd (head sorts))
+       , zipWith (\(a, b) c -> (a, b, c)) (tail sorts) fakeCons
+       , (eliminator, induction, recursor)
+       )
 
 const' :: var -> Value var -> Value var
 const' x v = VFn x (const v)
@@ -197,7 +203,6 @@ checkProgram [] kont = do
   unless (Map.null unp) $ do
     for_ (Map.toList unp) $ \(m, loc) -> do
       withLocation loc $ \() -> typeError (Undefined m)
-
   kont
 checkProgram (d:ds) kont = flip id (checkProgram ds kont) =<< checkDeclLoc d
 

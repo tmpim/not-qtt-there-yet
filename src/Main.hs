@@ -1,72 +1,74 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Main where
 
 import Text.Megaparsec (sourceColumn, unPos, SourcePos(sourceLine))
 
 import Control.Monad.Reader
 
-import qualified Data.Map.Strict as Map
 import qualified Data.Text.IO as T
 import qualified Data.Text as T
-import qualified Data.Set as Set
 
 import Data.Range
-import Data.Set (toList, Set)
 
-import Presyntax.Parser
-import Presyntax (Var(..))
 
-import Qtt.Evaluate
 import Qtt.Environment
-import Qtt
 
-import Check.Monad
-import Check
-import Control.Concurrent (takeMVar)
 import Data.Foldable (for_)
-import System.Exit (exitFailure)
+
+import System.Environment
+
+import qualified Rock
+
+import Driver.Rules (checkFile, rules)
+import Driver.Query
+import Data.IORef
+import Presyntax
+import Check.Monad
+import Control.Exception (catch)
+import Check.TypeError (TypeError)
+import Qtt.Pretty
+
 
 main :: IO ()
-main = do
-  putStrLn "hello world"
+main =
+  do
+    (mod:vs) <- getArgs
+    let files = [mod]
 
-testFile :: String -> IO ()
-testFile path = do
-  env <- emptyEnv
-  text <- T.readFile path
-  prog <- parseFileIO path text
-  x <- runChecker (checkProgram prog (asks id)) env
-  let lines = T.lines text
-  case x of
-    Left (e, rs) -> do
-      let r = head (filter (\r -> unPos (sourceColumn (rangeEnd r)) - unPos (sourceColumn (rangeStart r)) > 1) rs)
-      print e
-      printRange lines r
-    Right (env, deferred) -> do
-      for_ deferred $ \(Equation a b c) -> do
-        Right (c, _) <- runChecker (zonk c) env
-        print (Equation a b c)
-      set <- takeMVar (unsolvedMetas env)
-      for_ (toList set) (reportUnsolved lines env)
-      unless (null set) exitFailure
+    memoMap <- newIORef mempty
+    cycles <- newIORef mempty
+    persistent <- newIORef =<< emptyPState
 
-      liftIO . putStrLn $ "Theorems: "
-      for_ (Map.toList (assumptions env)) $ \(v, t) -> do
-        Right (zonked, _) <- runChecker (zonk t) env
-        putStrLn $ show v ++ " : " ++ show (prettify mempty zonked)
+    let rules' = Rock.memoiseWithCycleDetection memoMap cycles (rules persistent files)
 
-reportUnsolved :: [T.Text] -> Env Var -> Meta Var -> IO ()
-reportUnsolved lines env m = do
-  putStrLn $ "Error: Unsolved metavariable: " ++ show m
-  printRange lines (metaLocation m)
-  Right (ex, _) <- runChecker (zonk (metaExpected m)) env
-  let dropT (Binder{Qtt.var = v}:bs) (VPi _ rng) = dropT bs (rng (valueVar v))
-      dropT [] t = t
-      dropT _ _ = undefined
+    print =<< Rock.runTask (Rock.traceFetch (liftIO . print) (\_ _ -> pure ()) rules') (checkFile mod)
+    -- TODO: repl
+    for_ vs $ \v -> do
+      t <- Rock.runTask rules' (Rock.fetch (VariableType mod (Intro (T.pack v))))
+      case t of
+        Just t -> putStrLn $ v ++ " : " ++ show (prettify mempty t)
+        _ -> putStrLn $ "Not in scope: " ++ v
+  `catch` \case
+    Tee e -> error $ "Internal error: " ++ show e
+    Teer e (r:_) -> do
+      lines <- T.lines <$> T.readFile (rangeFile r)
+      _ <- printRange lines r
+      print (e :: TypeError Var)
+    Teer e _ -> error $ "Internal error: " ++ show e
 
-      metaT = dropT (metaTelescope m) (ex)
-  putStrLn $ "Note: it was expected to have type " ++ show metaT
+reportWithLines :: (MonadReader (Env a) m, MonadIO m) => [T.Text] -> String -> m ()
+reportWithLines file s = do
+  ~(loc:_) <- asks locationStack
+  liftIO $ do
+    putStrLn $ "Information: "
+    p <- printRange file loc
+    for_ (lines s) $ \l ->
+      T.putStrLn (p <> T.pack l)
 
-printRange :: [T.Text] -> Range -> IO ()
+printRange :: [T.Text] -> Range -> IO T.Text
 printRange lines r = do
   let l = unPos $ sourceLine (rangeStart r)
       padding = T.replicate (length (show l) + 1) (T.singleton ' ')
@@ -78,34 +80,4 @@ printRange lines r = do
             <> T.replicate (unPos (sourceColumn (rangeStart r)) - 1) (T.singleton ' ')
             <> T.replicate (unPos (sourceColumn (rangeEnd r)) - unPos (sourceColumn (rangeStart r))) (T.singleton '~')
              )
-
-prettify :: Set T.Text -> Value Var -> Value Var
-prettify scope (VFn arg cont) =
-  case arg of
-    Refresh var _ ->
-      if var `Set.member` scope
-        then VFn arg (prettify scope . cont)
-        else VFn (Intro var) (prettify (Set.insert var scope) . cont)
-    Intro var ->
-      let new = findFresh var scope
-       in if var `Set.member` scope
-             then VFn (Intro new) (prettify (Set.insert new scope) . cont)
-             else VFn (Intro var) (prettify (Set.insert var scope) . cont)
-prettify scope (VPi (Binder arg vis domain) range) =
-  case arg of
-    Refresh var _ ->
-      if var `Set.member` scope
-        then VPi (Binder arg         vis (prettify mempty domain)) (prettify scope . range)
-        else VPi (Binder (Intro var) vis (prettify mempty domain)) (prettify (Set.insert var scope) . range)
-    Intro var ->
-      let new = findFresh var scope
-       in if var `Set.member` scope
-             then VPi (Binder (Intro new) vis (prettify mempty domain)) (prettify (Set.insert new scope) . range)
-             else VPi (Binder (Intro var) vis (prettify mempty domain)) (prettify (Set.insert var scope) . range)
-prettify _ x = x
-
-findFresh :: T.Text -> Set T.Text -> T.Text
-findFresh v s =
-  if v `Set.member` s
-    then findFresh (T.snoc v '\'') s
-    else v
+  pure (padding)

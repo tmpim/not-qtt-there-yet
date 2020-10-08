@@ -7,7 +7,6 @@ import Data.Range
 import Presyntax.Lexer
 import Presyntax
 import Data.Text (Text)
-import Data.Foldable
 import Control.Exception (throwIO)
 import qualified Text.Megaparsec.Char.Lexer as L
 
@@ -70,7 +69,7 @@ expr =
 
 decl :: Parser (L (Decl L Var))
 decl =
-  dataDecl <|> do
+  loc (fmap DataStmt dataDecl) <|> do
     id <- var
     col <- optional colon
     loc $
@@ -87,8 +86,8 @@ decl =
         Just _ -> expr
     arg = ((,) Visible <$> identifier) <|> ((,) Invisible <$> braces identifier)
 
-dataDecl :: Parser (L (Decl L Var))
-dataDecl = loc $ L.indentBlock cuboSpaceN parseHeader where
+dataDecl :: Parser (DataDecl L Var)
+dataDecl = L.indentBlock cuboSpaceN parseHeader where
   parseHeader = do
     _ <- symbol "data"
     name <- var

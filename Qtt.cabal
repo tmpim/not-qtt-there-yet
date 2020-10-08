@@ -18,10 +18,23 @@ executable Qtt
   main-is:             Main.hs
   default-language:    Haskell2010
   build-depends:       base >= 4.7 && < 5
-                     , mtl, transformers, containers, megaparsec, text, unordered-containers, hashable
-  other-modules:       Qtt.Environment
+                     , mtl
+                     , text
+                     , rock
+                     , some
+                     , hashable
+                     , containers
+                     , megaparsec
+                     , transformers
+                     , monad-control
+                     , dependent-hashmap
+                     , transformers-base
+                     , unordered-containers
+                     , dependent-sum-template
+  other-modules:       Qtt
+                     , Qtt.Pretty
                      , Qtt.Evaluate
-                     , Qtt
+                     , Qtt.Environment
 
                      , Check.TypeError
                      , Check.Subsumes
@@ -29,6 +42,9 @@ executable Qtt
                      , Check.Monad
                      , Check.Data
                      , Check
+
+                     , Driver.Query
+                     , Driver.Rules
 
                      , Presyntax
                      , Presyntax.Parser

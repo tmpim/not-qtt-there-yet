@@ -5,6 +5,8 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE BangPatterns #-}
 module Qtt where
 
 import Control.Concurrent (MVar)
@@ -12,6 +14,9 @@ import Control.Concurrent (MVar)
 import Data.Sequence (Seq)
 import Data.Range ( Range )
 import qualified Data.Sequence as Seq
+import Data.Hashable
+import Data.HashSet (HashSet)
+import qualified Data.HashSet as HashSet
 
 data Visibility = Visible | Invisible
   deriving (Eq, Show, Ord)
@@ -39,14 +44,15 @@ quantify (b:qs) r = Pi b (quantify qs r)
 
 data Elim a
   = Var a
+  | Con a
   | Meta (Meta a)
   | App (Elim a) (Term a)
   | Cut (Term a) (Term a)
   deriving (Eq, Ord)
 
 data Meta a
-  = MV { metaId :: a
-       , metaSlot :: MVar (Term a)
+  = MV { metaId          :: a
+       , metaSlot        :: MVar (Value a)
        , metaBlockedEqns :: MVar (Seq (Constraint a))
        , metaLocation    :: Range
        , metaExpected    :: Value a
@@ -76,6 +82,7 @@ instance Eq var => Eq (Value var) where
 
 data Neutral var
   = NVar var
+  | NCon var
   | NMeta (Qtt.Meta var)
   | NApp (Neutral var) (Seq (Value var))
   deriving (Eq)
@@ -88,17 +95,23 @@ data Constraint var
              , equationSpine :: Seq (Value var)
              , equationRHS   :: Value var
              }
+  deriving (Eq)
 
 valueVar :: var -> Value var
 valueVar = VNe . NVar
 
-quoteNeutral :: Neutral var -> Qtt.Elim var
+quoteNeutral :: Eq var => Neutral var -> Qtt.Elim var
 quoteNeutral (NVar v) = Qtt.Var v
+quoteNeutral (NCon v) = Qtt.Con v
 quoteNeutral (NMeta v) = Qtt.Meta v
 quoteNeutral (NApp f x) = foldl Qtt.App (quoteNeutral f) (fmap quote x)
 
-quote :: Value var -> Qtt.Term var
-quote (VFn var b) = Qtt.Lam var (quote (b (valueVar var)))
+quote :: Eq var => Value var -> Qtt.Term var
+quote (VFn var b) =
+  case body of
+    VNe (NApp f sp) | Just n <- etaReduceMaybe f sp var -> Elim (quoteNeutral n)
+    _ -> Lam var (quote body)
+  where body = b (valueVar var)
 quote (VPi binder range) =
   Qtt.Pi binder{ domain = quote (domain binder) } (quote (range (valueVar (var binder))))
 quote VSet = Qtt.Set
@@ -118,6 +131,7 @@ isVarAlive var (Elim c) = go c where
   go (Var var') = var == var'
   go (App e c) = go e || isVarAlive var c
   go Meta{} = False
+  go Con{} = False
   go (Cut a b) = isVarAlive var a || isVarAlive var b
 isVarAlive _ Prop{} = False
 isVarAlive _ Set{} = False
@@ -138,7 +152,7 @@ instance (Eq a, Show a) => Show (Term a) where
               (shows var . showString " : " . showsPrec 0 d)
             . showString " -> "
             . shows r
-        | otherwise -> showsPrec 1 d . showString " -> " . showsPrec prec r
+        | otherwise -> showParen (prec >= 1) $ showsPrec 1 d . showString " -> " . showsPrec (prec - 1) r
       Set    -> showString "Type"
       Prop   -> showString "Prop"
       Elim e -> showsPrec prec e
@@ -149,7 +163,8 @@ data Sort = SSet | SProp
   deriving (Eq, Show, Ord)
 
 instance (Eq a, Show a) => Show (Elim a) where
-  showsPrec _ (Var x) = shows x
+  showsPrec _ (Var x) = showString "\x1b[1;32m" . shows x . showString "\x1b[0m"
+  showsPrec _ (Con x) = showString "\x1b[1;31m" . shows x . showString "\x1b[0m"
   showsPrec _ (Meta v) = shows v
   showsPrec _ (Cut a b) = showChar '(' . showsPrec 1 a . showString " : " . shows b . showChar ')'
   showsPrec prec x =
@@ -169,5 +184,32 @@ instance Show a => Show (Meta a) where
 instance Ord a => Ord (Meta a) where
   compare mv mv' = compare (metaId mv) (metaId mv')
 
+instance Ord a => Ord (Constraint a) where
+  compare (Equation a _ _) (Equation b _ _) = compare a b
+
 instance (Show var, Eq var) => Show (Constraint var) where
   show (Equation m s r) = show m ++ " " ++ show s ++ " ≡? " ++ show r
+
+etaReduceMaybe :: Eq var => Neutral var -> Seq (Value var) -> var -> Maybe (Neutral var)
+etaReduceMaybe f spine var =
+  case Seq.viewr spine of
+    sp Seq.:> v | v == valueVar var, not (isVarAlive var (Elim (quoteNeutral (NApp f sp)))) ->
+      Just (NApp f sp)
+    _ -> Nothing
+
+nonLocalVars :: (Hashable var, Eq var) => Term var -> HashSet var
+nonLocalVars = goTerm mempty mempty where
+  goTerm !scope !free (Elim t) = goNeutral scope free t
+  goTerm !scope !free (Lam x t) = goTerm (HashSet.insert x scope) free t
+  goTerm !scope !free (Pi (Binder{var = v, domain = d}) r) =
+    goTerm (HashSet.insert v scope) (goTerm scope free d) r
+  goTerm !_ !x Set = x
+  goTerm !_ !x Prop = x
+
+  goNeutral !scope !free (Var v)
+    | HashSet.member v scope = free
+    | otherwise = HashSet.insert v free
+  goNeutral !_ !free (Con v) = HashSet.insert v free
+  goNeutral !_ !free Meta{} = free
+  goNeutral !scope !free (Cut a b) = goTerm scope (goTerm scope free a) b
+  goNeutral !scope !free (App f x) = goTerm scope (goNeutral scope free f) x

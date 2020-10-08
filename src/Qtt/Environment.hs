@@ -1,11 +1,14 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE FlexibleContexts #-}
 module Qtt.Environment
-  ( Env(..), emptyEnv
+  ( Env(..), emptyEnv, emptyEnvWithReporter
   , assume, assuming, envVariables
   , declare, insertDecl
   , lookupType
   , lookupValue
   , withLocation
+  
+  , report
   ) where
 
 import Control.Monad.Reader.Class (local, asks, MonadReader)
@@ -20,26 +23,49 @@ import Data.Range
 import Presyntax (L(..))
 
 import Qtt
+import Data.Sequence
+import qualified Data.Set as Set
 
 data Env a =
-  Env { assumptions   :: Map a (Value a)
-      , declarations  :: Map a (Value a)
-      , unsolvedMetas :: MVar (Set (Meta a))
-      , locationStack :: [Range]
-      , unproven      :: Map a (L ())
-      , toplevel      :: Set a
-      }
+  Env
+    { assumptions   :: Map a (Value a)
+    , declarations  :: Map a (Value a)
+    , locationStack :: [Range]
+    , unproven      :: Map a (L ())
+    , toplevel      :: Set a
+    , constructors  :: Set a
 
-emptyEnv :: (MonadIO m, Ord a) => m (Env a)
-emptyEnv = do
-  var <- liftIO (newMVar mempty)
-  pure $ Env mempty mempty var mempty mempty mempty
+    , unsolvedMetas :: MVar (Set (Meta a))
+    , deferredEqns  :: MVar (Map (Meta a) (Seq (Constraint a)))
+
+    , reporterFunction :: forall m. (MonadIO m, MonadReader (Env a) m) => String -> m ()
+
+    , currentModule :: FilePath
+    , currentlyChecking :: Maybe a
+    }
+
+emptyEnv :: (MonadIO m, Ord a) => FilePath -> m (Env a)
+emptyEnv path = emptyEnvWithReporter path (liftIO . putStrLn)
+
+emptyEnvWithReporter :: (MonadIO m, Ord a)
+                     => FilePath
+                     -> (forall m. (MonadIO m, MonadReader (Env a) m) => String -> m ())
+                     -> m (Env a)
+emptyEnvWithReporter path report = do
+  unsolved <- liftIO (newMVar mempty)
+  deferred <- liftIO (newMVar mempty)
+  pure $ Env mempty mempty mempty mempty mempty mempty unsolved deferred report path Nothing
+
+report :: (MonadIO m, MonadReader (Env a) m) => String -> m ()
+report s = ($ s) =<< asks reporterFunction
 
 assume :: (MonadReader (Env a) m, Ord a) => a -> Value a -> m b -> m b
-assume x t = local (\env -> env { assumptions = Map.insert x t (assumptions env) })
+assume x t = local (\env -> env { assumptions = Map.insert x t (assumptions env), constructors = Set.delete x (constructors env) })
 
 assuming :: (MonadReader (Env a) m, Ord a) => [(a, Value a)] -> m b -> m b
-assuming vars = local (\env -> env { assumptions = Map.union (assumptions env) (Map.fromList vars) })
+assuming vars = local (\env -> env { assumptions = Map.union (assumptions env) (Map.fromList vars)
+                                   , constructors = Set.difference (constructors env) (Set.fromList (map fst vars))
+                                   })
 
 envVariables :: Env a -> [a]
 envVariables = Map.keys . assumptions
@@ -48,6 +74,7 @@ declare :: (MonadReader (Env a) m, Ord a) => a -> Value a -> Value a -> m b -> m
 declare x t val = local k where
   k env = env { assumptions = Map.insert x t (assumptions env)
               , declarations = Map.insert x val (declarations env)
+              , constructors = Set.delete x (constructors env)
               }
 
 insertDecl :: Ord a => a -> Value a -> Env a -> Env a

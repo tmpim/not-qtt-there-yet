@@ -1,3 +1,4 @@
+{-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -20,10 +21,10 @@ import qualified Data.Sequence as Seq
 import Data.Foldable (for_)
 
 import Check.Fresh
-import Control.Monad.Except (throwError, MonadError(catchError))
 import Control.Monad.Reader (asks)
 
 import Data.Sequence (Seq)
+import qualified Data.Map.Strict as Map
 
 subsumes :: TypeCheck a m
          => Value a
@@ -31,12 +32,6 @@ subsumes :: TypeCheck a m
          -> m (Value a -> Value a)
 
 subsumes a b | a == b = pure id
-
-subsumes (VNe a) val
-  | Just (meta, spine) <- isMeta a = solve meta spine val
-
-subsumes val (VNe a)
-  | Just (meta, spine) <- isMeta a = solve meta spine val
 
 subsumes (VPi binder rng) (VPi binder' rng') | visibility binder == visibility binder' = do
   coe <- subsumes (domain binder') (domain binder)
@@ -55,6 +50,15 @@ subsumes (VPi b@Binder{visibility=Invisible} range) r = do
 -- λx. e ≡ g → e ≡ g x
 subsumes (VFn var k) b =
   subsumes (k (valueVar var)) (b @@ valueVar var)
+
+subsumes b (VFn var k) =
+  subsumes (b @@ valueVar var) (k (valueVar var))
+
+subsumes (VNe a) val
+  | Just (meta, spine) <- isMeta a = solve meta spine val
+
+subsumes val (VNe a)
+  | Just (meta, spine) <- isMeta a = solve meta spine val
 
 subsumes (VNe a) (VNe b) = do
   t <- elimType a
@@ -102,37 +106,62 @@ subsumesNe kind a b =
       subsumesTelescope t as bs
     subsumesTelescope _ _ _ = error "Malformed subsumesTelescope"
 
-solve :: TypeCheck a m
-      => Meta a
-      -> Seq (Value a)
-      -> Value a
-      -> m (Value a -> Value a)
-solve meta@MV{..} spine val
-  | Just MV{..} <- metaHeaded val =
+solve :: TypeCheck a m => Meta a -> Seq (Value a) -> Value a -> m (Value a -> Value a)
+doSolve :: TypeCheck a m => Meta a -> Seq (Value a) -> Value a -> m (Value a -> Value a)
+
+doSolve meta@MV{..} incomingSpine incomingVal
+  | Just MV{..} <- metaHeaded val = do
       fmap (const id) . liftIO . modifyMVar_ metaBlockedEqns $ \queue ->
         pure (queue Seq.:|> Equation meta spine val)
-  | Just vars <- isPattern spine =
-      do
-        val <- quote <$> zonk val
-        top <- asks toplevel
-        checkScope (top <> vars) val
-        fakeLam <- evaluate $ foldr (\(VNe (NVar v)) b -> Lam v b) val spine
-        x <- liftIO $ tryReadMVar metaSlot
-        case x of
-          Nothing -> do
-            solveMeta meta
-            liftIO $ putMVar metaSlot (quote fakeLam)
-            t <- liftIO $ swapMVar metaBlockedEqns mempty
-            for_ t $ \(Equation meta spine val) -> do
-              solve meta spine val
-            pure id
-          Just t -> do
-            tv <- evaluate t
-            subsumes (foldl (@@) tv spine) =<< evaluate (quote (foldl (@@) fakeLam spine))
-      `catchError` \(_, r) -> do
-        m <- zonk (VNe (NApp (NMeta meta) spine))
-        throwError ((NotEqual m val), r)
-  | otherwise = id <$ defer meta spine val
+  | Just vars <- isPattern spine = do
+      -- Check the scoping of the RHS
+      val <- quote <$> zonk val
+      checkScope vars val
+
+      -- Make λ spine → rhs
+      fakeLam <- evaluate $ foldr (\(VNe (NVar v)) b -> Lam v b) val spine
+
+      -- Solve it
+      liftIO $ putMVar metaSlot fakeLam
+      solveMeta meta
+
+      pure id
+  | otherwise = do
+    id <$ defer meta spine val
+  where (spine, val) = contractSpine incomingSpine incomingVal
+
+solve meta spine value = do
+  x <- liftIO $ tryReadMVar (metaSlot meta)
+  case x of
+    Just thing -> subsumes (foldl (@@) thing spine) value
+    Nothing -> doSolve meta spine value
+
+solveMeta :: TypeCheck a m => Meta a -> m ()
+solveMeta meta = do
+  unsolved <- asks unsolvedMetas
+  liftIO . modifyMVar_ unsolved $ pure . Set.delete meta
+
+  t <- liftIO $ swapMVar (metaBlockedEqns meta) mempty
+  for_ t $ \(Equation meta spine val) -> do
+    solve meta spine val
+
+  defSlot <- asks deferredEqns
+  deferred <- liftIO (takeMVar defSlot)
+
+  case Map.lookup meta deferred of
+    Just eqns -> do
+      liftIO $ putMVar defSlot (Map.delete meta deferred)
+      for_ eqns $ \(Equation a b c) ->
+        solve a b c
+    Nothing -> liftIO $ putMVar defSlot deferred
+
+contractSpine :: Eq a => Seq (Value a) -> Value a -> (Seq (Value a), Value a)
+contractSpine m_spine val@(VNe (NApp f f_spine)) =
+  case (Seq.viewr m_spine, Seq.viewr f_spine) of
+    (m_spine' Seq.:> VNe (NVar v), f_spine' Seq.:> VNe (NVar v'))
+      | v == v' -> contractSpine m_spine' (VNe (NApp f f_spine'))
+    _ -> (m_spine, val)
+contractSpine x y = (x, y)
 
 metaHeaded :: Value a -> Maybe (Meta a)
 metaHeaded (VNe (NApp (NMeta m) _)) = Just m
@@ -143,7 +172,8 @@ checkScope :: TypeCheck a m => Set a -> Term a -> m ()
 checkScope set (Elim a) = go a where
   go (Var v)
     | v `Set.member` set = pure ()
-    | otherwise = typeError (NotInScope v)
+    | otherwise = () <$ lookupVariable v
+  go Con{} = pure ()
   go (App a b) = do
     go a
     checkScope set b
@@ -180,23 +210,16 @@ sortOfKind VProp = pure VSet
 sortOfKind VSet = pure VSet
 sortOfKind (VNe a) =
   case a of
-    NVar t -> do
-      ty <- lookupType t
-      case ty of
-        Just k -> pure k
-        Nothing -> typeError (NotInScope t)
+    NVar t -> lookupVariable t
+    NCon t -> lookupVariable t
     NMeta t -> sortOfKind (metaExpected t)
     NApp v t -> elimType (NApp v t)
-sortOfKind x = error (show x)
 
 elimType :: TypeCheck var m
          => Neutral var
          -> m (Value var)
-elimType (NVar v) = do
-  t <- lookupType v
-  case t of
-    Nothing -> typeError (NotInScope v)
-    Just t -> pure $ t
+elimType (NVar v) = lookupVariable v
+elimType (NCon v) = lookupVariable v
 elimType (NMeta mv) = pure (metaExpected mv)
 elimType (NApp f xs) = do
   kind <- elimType f
@@ -228,6 +251,7 @@ isPiType Visible hint (VPi Binder{visibility = Invisible, domain = dom } rng) = 
   pure (domain, range, \x -> inner (App x (quote meta)))
 
 isPiType v _ ty@VSet{} = typeError (NotPi v ty)
+isPiType v _ ty@VProp{} = typeError (NotPi v ty)
 isPiType v _ ty@VFn{} = typeError (NotPi v ty)
 isPiType over hint t@VNe{} = do
   name <- case hint of

@@ -1,17 +1,24 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Check.Monad where
 
 import Control.Monad.Writer.Strict
-import Control.Concurrent (tryReadMVar, modifyMVar_, newMVar, newEmptyMVar)
+import Control.Concurrent (putMVar, tryTakeMVar, tryReadMVar, modifyMVar_, newMVar, newEmptyMVar)
 import Control.Monad.Except
 import Control.Monad.Reader
 
+import qualified Data.Map.Strict as Map
 import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 import Data.Sequence (Seq)
 import Data.Set (Set)
+import Data.Range
 
 import Qtt.Environment
 import Qtt
@@ -19,21 +26,43 @@ import Qtt
 import Check.TypeError
 import Check.Fresh
 
-import Data.Range
-import qualified Data.Map.Strict as Map
+
+import Rock (fetch, Task, MonadFetch)
+import Driver.Query
+import Control.Monad.Trans.Control
+import Control.Monad.Base
+import Control.Exception (Exception, catch)
+import Type.Reflection ( Typeable )
+import Data.Hashable
+import Qtt.Evaluate
 
 type TypeCheck var m =
-  ( Fresh var, Eq var, Ord var, Show var -- var is a variable type
+  ( Fresh var, Eq var, Ord var, Show var, Hashable var, Typeable var -- var is a variable type
   , MonadReader (Env var) m
-  , MonadWriter (Seq (Constraint var)) m
   , MonadError (TypeError var, [Range]) m
   , MonadIO m
+  , MonadFetch (Query var) m
+
+  , MonadBase IO m
+  , MonadBaseControl IO m
   )
 
 defer :: TypeCheck var m => Meta var -> Seq (Value var) -> Value var -> m ()
-defer m s r = tell (Seq.singleton (Equation m s r))
+defer m s r =
+  do
+    slot <- asks deferredEqns
+    deferred <- liftIO (tryTakeMVar slot)
+    liftIO $
+      case deferred of
+        Just map -> putMVar slot (insert m (Equation m s r) map)
+        Nothing -> putMVar slot (Map.singleton m (Seq.singleton (Equation m s r)))
+  where
+    insert key eq = Map.alter (go eq) key
 
-freshMeta :: (MonadReader (Env a) m, MonadIO m, Fresh a, Ord a) => Value a -> m (Value a)
+    go eq Nothing = Just (Seq.singleton eq)
+    go eq (Just s) = Just (s Seq.:|> eq)
+
+freshMeta :: (MonadReader (Env a) m, MonadIO m, Fresh a, Ord a, Show a) => Value a -> m (Value a)
 freshMeta expected = do
   id <- fresh
   top <- asks toplevel
@@ -56,21 +85,18 @@ freshMeta expected = do
   liftIO . modifyMVar_ unsolved $ pure . Set.insert meta
   pure (VNe (NApp (NMeta meta) (fmap valueVar (Seq.fromList (map fst tele)))))
 
-solveMeta :: TypeCheck a m => Meta a -> m ()
-solveMeta meta = do
-  unsolved <- asks unsolvedMetas
-  liftIO . modifyMVar_ unsolved $ pure . Set.delete meta
-
-newtype TCM var a = TCM { runChecker :: Env var -> IO (Either (TypeError var, [Range]) (a, Seq (Constraint var)))}
+newtype TCM var a = TCM { runChecker :: Env var -> Rock.Task (Query var) (Either (TypeError var, [Range]) a) }
   deriving ( Functor
            , Applicative
            , Monad
            , MonadReader (Env var)
-           , MonadWriter (Seq (Constraint var))
            , MonadError (TypeError var, [Range])
+           , MonadFetch (Query var)
+           , MonadBase IO
+           , MonadBaseControl IO
            , MonadIO
            )
-    via (ReaderT (Env var) (WriterT (Seq (Constraint var)) (ExceptT (TypeError var, [Range]) IO)))
+    via (ReaderT (Env var) (ExceptT (TypeError var, [Range]) (Task (Query var))))
 
 getUnsolvedMetas :: TypeCheck var m => m (Set (Meta var))
 getUnsolvedMetas = do
@@ -85,3 +111,36 @@ typeError :: TypeCheck var m => TypeError var -> m b
 typeError e = do
   c <- asks locationStack
   throwError (e, c)
+
+fetchTC :: forall m var a. TypeCheck var m => Query var a -> m a
+fetchTC query = control $ \runInIO ->
+  catch (runInIO (Rock.fetch query)) $
+        \case
+          Tee e -> runInIO (typeError e :: m a)
+          Teer e r -> runInIO (throwError (e, r) :: m a)
+
+lookupVariable :: forall m var. TypeCheck var m => var -> m (Value var)
+lookupVariable v = do
+  t <- asks (Map.lookup v . assumptions)
+  case t of
+    Just ty -> pure ty
+    Nothing -> do
+      mod <- asks currentModule
+      t <- fetchTC (VariableType mod v)
+      case t of
+        Just ty -> pure ty
+        _ -> typeError (NotInScope v)
+
+isConstructor :: forall m var. TypeCheck var m => var -> m Bool
+isConstructor v = asks (Set.member v . constructors)
+
+-- TODO
+
+evaluate :: TypeCheck var m => Term var -> m (Value var)
+evaluate = doEvaluate
+
+evaluateNeutral :: TypeCheck var m => Elim var -> m (Value var)
+evaluateNeutral = doEvaluateNeutral
+
+data TypeErrorException var = Tee (TypeError var) | Teer (TypeError var) [Range]
+  deriving (Eq, Show, Exception)
