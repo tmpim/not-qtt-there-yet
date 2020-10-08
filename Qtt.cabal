@@ -43,6 +43,8 @@ executable Qtt
                      , Check.Data
                      , Check
 
+                     , Control.Concurrent.IO
+
                      , Driver.Query
                      , Driver.Rules
 

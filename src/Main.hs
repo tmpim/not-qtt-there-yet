@@ -8,30 +8,36 @@ import Text.Megaparsec (sourceColumn, unPos, SourcePos(sourceLine))
 
 import Control.Monad.Reader
 
+import Control.Concurrent.IO
+import Control.Concurrent
+import Control.Exception (catch)
+
 import qualified Data.Text.IO as T
 import qualified Data.Text as T
+import qualified Data.HashSet as HashSet
+import Data.Foldable (traverse_, for_)
+import Data.IORef
 
 import Data.Range
 
-
 import Qtt.Environment
 
-import Data.Foldable (traverse_, for_)
+import Qtt.Pretty (prettify)
+import Qtt
 
 import System.Environment
 
 import qualified Rock
 
 import Driver.Rules (checkFile, rules)
+
 import Driver.Query
-import Data.IORef
 import Presyntax
-import Check.Monad
-import Control.Exception (catch)
+
 import Check.TypeError (TypeError)
-import qualified Data.HashSet as HashSet
-import Qtt
-import Qtt.Pretty (prettify)
+import Check.Monad
+
+import Prelude hiding (putStrLn, putStr, print)
 
 
 main :: IO ()
@@ -45,7 +51,8 @@ main =
 
     let rules' = Rock.memoiseWithCycleDetection memoMap cycles (rules persistent files)
 
-    print =<< Rock.runTask (Rock.traceFetch (liftIO . print) (\_ _ -> pure ()) rules') (traverse_ checkFile files)
+    for_ files $ \f -> forkIO $ do
+      print =<< Rock.runTask (Rock.traceFetch (liftIO . traceReq) (\_ _ -> pure ()) rules') (checkFile f)
     Rock.runTask rules' (reportUnsolved =<< Rock.fetch UnsolvedMetas)
   `catch` \case
     Tee e -> error $ "Internal error: " ++ show e
@@ -54,6 +61,11 @@ main =
       _ <- printRange lines r
       print (e :: TypeError Var)
     Teer e _ -> error $ "Internal error: " ++ show e
+
+traceReq :: Query Var a1 -> IO ()
+traceReq v = do
+  t <- myThreadId
+  putStrLn $ "[" ++ show t ++ "]: " ++ show v
 
 reportUnsolved :: HashSet.HashSet (Meta Var) -> Rock.Task (Query Var) ()
 reportUnsolved = go . HashSet.toList where
