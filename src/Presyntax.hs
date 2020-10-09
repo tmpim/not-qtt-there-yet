@@ -7,15 +7,15 @@ module Presyntax where
 
 import Check.Fresh
 
-import Data.Hashable
-import Data.Range
-import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Hashable
+import Data.Text (Text)
 
 import Qtt (Visibility(..))
 import GHC.Generics (Generic)
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as HashSet
+import Data.L
 
 data Expr f a
   = Var a
@@ -41,14 +41,6 @@ exprFreeVars Hole = mempty
 
 deriving instance (forall a. Show a => Show (f a), Show a) => Show (Expr f a)
 deriving instance (forall a. Eq a => Eq (f a), Eq a) => Eq (Expr f a)
-
-data L a
-  = L { lThing :: a
-      , lRange :: Range }
-  deriving (Eq, Ord, Functor, Foldable)
-
-instance Show a => Show (L a) where
-  show = show . lThing
 
 data Var
   = Intro Text

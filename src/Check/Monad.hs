@@ -34,6 +34,8 @@ import Control.Monad.Base
 import Control.Exception (Exception, catch)
 
 import Type.Reflection ( Typeable )
+import qualified Data.HashSet as HashSet
+import Qtt.Builtin
 
 type TypeCheck var m =
   ( Fresh var, Typeable var -- var is a variable type
@@ -84,7 +86,8 @@ freshMeta expected = do
   liftIO . modifyMVar_ unsolved $ pure . Set.insert meta
   pure (VNe (NApp (NMeta meta) (fmap valueVar (Seq.fromList (map fst tele)))))
 
-newtype TCM var a = TCM { runChecker :: Env var -> Rock.Task (Query var) (Either (TypeError var, [Range]) a) }
+newtype TCM var a
+  = TCM { runChecker :: Env var -> Rock.Task (Query var) (Either (TypeError var, [Range]) a) }
   deriving ( Functor
            , Applicative
            , Monad
@@ -117,6 +120,33 @@ fetchTC query = control $ \runInIO ->
         \case
           Tee e -> runInIO (typeError e :: m a)
           Teer e r -> runInIO (throwError (e, r) :: m a)
+
+findBuiltin :: forall m var kit. TypeCheck var m => Builtin var kit -> m kit
+findBuiltin b = fetchTC (MakeBuiltin b)
+
+recover :: forall m var. TypeCheck var m
+        => Value var
+        -> m (Value var)
+        -> m (Value var)
+recover expectedType comp =
+  catchError comp $
+    \(error, loc) -> do
+       ref <- asks recoveredErrors
+       liftIO $ modifyMVar_ ref (pure . HashSet.insert (error, loc))
+       fail <- findBuiltin BuiltinFail
+       pure (builtinValue fail @@ expectedType)
+
+recoverQ :: forall m var. TypeCheck var m
+         => Value var
+         -> m (Term var)
+         -> m (Term var)
+recoverQ expectedType comp =
+  catchError comp $
+    \(error, loc) -> do
+       ref <- asks recoveredErrors
+       liftIO $ modifyMVar_ ref (pure . HashSet.insert (error, loc))
+       fail <- findBuiltin BuiltinFail
+       pure (Elim (App (Var (builtinName fail)) (quote expectedType)))
 
 lookupVariable :: forall m var. TypeCheck var m => var -> m (Value var)
 lookupVariable v = do

@@ -20,9 +20,18 @@ import Data.Hashable
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as HashSet
 import GHC.Generics (Generic)
+import Data.L
+import Control.Comonad
 
 data Visibility = Visible | Invisible
   deriving (Eq, Show, Ord, Generic, Hashable)
+
+data Binder t a =
+  Binder { var        :: a
+         , visibility :: Visibility
+         , domain     :: t a
+         }
+  deriving (Eq, Ord, Generic, Hashable)
 
 data Term a
   -- Both impredicative universes, with Prop : Set and Set : Set (unfortunately)
@@ -32,18 +41,10 @@ data Term a
        }
   | Lam a (Term a)
   | Elim  (Elim a)
-  deriving (Eq, Ord, Generic, Hashable)
 
-data Binder t a =
-  Binder { var        :: a
-         , visibility :: Visibility
-         , domain     :: t a
-         }
+  -- Interaction stuff:
+  | SpannedTerm (L (Term a))
   deriving (Eq, Ord, Generic, Hashable)
-
-quantify :: [Binder Term var] -> Term var -> Term var
-quantify [] t     = t
-quantify (b:qs) r = Pi b (quantify qs r)
 
 data Elim a
   = Var a
@@ -70,19 +71,6 @@ data Value var
   | VSet
   | VProp
 
-instance (Eq var, Show var) => Show (Value var) where
-  show = show . quote
-
-instance Eq var => Eq (Value var) where
-  VNe a == VNe b = a == b
-  VFn var body == VFn var' body' = body (valueVar var') == body' (valueVar var)
-  VPi binder body == VPi binder' body' =
-       binder == binder'
-    && body (valueVar (var binder)) == body' (valueVar (var binder'))
-  VSet == VSet = True
-  VProp == VProp = True
-  _ == _ = False
-
 data Neutral var
   = NVar var
   | NCon var
@@ -90,15 +78,20 @@ data Neutral var
   | NApp (Neutral var) (Seq (Value var))
   deriving (Eq)
 
-instance (Show var, Eq var) => Show (Neutral var) where
-  show = show . quoteNeutral
-
 data Constraint var
   = Equation { equationMeta  :: Meta var
              , equationSpine :: Seq (Value var)
              , equationRHS   :: Value var
              }
   deriving (Eq)
+
+data Sort = SSet | SProp
+  deriving (Eq, Show, Ord)
+
+
+quantify :: [Binder Term var] -> Term var -> Term var
+quantify [] t     = t
+quantify (b:qs) r = Pi b (quantify qs r)
 
 valueVar :: var -> Value var
 valueVar = VNe . NVar
@@ -141,6 +134,32 @@ isVarAlive _ Set{} = False
 isVarAlive var (Lam v b) = v /= var && isVarAlive var b
 isVarAlive var (Pi binder@Binder{var=v} r) =
   isVarAlive var (domain binder) || (v /= var && isVarAlive var r)
+isVarAlive var (SpannedTerm x) = isVarAlive var (extract x)
+
+etaReduceMaybe :: Eq var => Neutral var -> Seq (Value var) -> var -> Maybe (Neutral var)
+etaReduceMaybe f spine var =
+  case Seq.viewr spine of
+    sp Seq.:> v | v == valueVar var, not (isVarAlive var (Elim (quoteNeutral (NApp f sp)))) ->
+      Just (NApp f sp)
+    _ -> Nothing
+
+nonLocalVars :: (Hashable var, Eq var) => Term var -> HashSet var
+nonLocalVars = goTerm mempty mempty where
+  goTerm !scope !free (Elim t) = goNeutral scope free t
+  goTerm !scope !free (Lam x t) = goTerm (HashSet.insert x scope) free t
+  goTerm !scope !free (Pi (Binder{var = v, domain = d}) r) =
+    goTerm (HashSet.insert v scope) (goTerm scope free d) r
+  goTerm !_ !x Set = x
+  goTerm !_ !x Prop = x
+  goTerm !scope !free (SpannedTerm s) = goTerm scope free (extract s)
+
+  goNeutral !scope !free (Var v)
+    | HashSet.member v scope = free
+    | otherwise = HashSet.insert v free
+  goNeutral !_ !free (Con v) = HashSet.insert v free
+  goNeutral !_ !free Meta{} = free
+  goNeutral !scope !free (Cut a b) = goTerm scope (goTerm scope free a) b
+  goNeutral !scope !free (App f x) = goTerm scope (goNeutral scope free f) x
 
 instance (Eq a, Show a) => Show (Term a) where
   showsPrec prec ex =
@@ -159,11 +178,9 @@ instance (Eq a, Show a) => Show (Term a) where
       Set    -> showString "Type"
       Prop   -> showString "Prop"
       Elim e -> showsPrec prec e
+      SpannedTerm t -> showsPrec prec (extract t)
     where showBracket Visible k = showParen True k
           showBracket Invisible k = showChar '{' . k . showChar '}'
-
-data Sort = SSet | SProp
-  deriving (Eq, Show, Ord)
 
 instance (Eq a, Show a) => Show (Elim a) where
   showsPrec _ (Var x) = showString "\x1b[1;32m" . shows x . showString "\x1b[0m"
@@ -196,26 +213,21 @@ instance Ord a => Ord (Constraint a) where
 instance (Show var, Eq var) => Show (Constraint var) where
   show (Equation m s r) = show m ++ " " ++ show s ++ " ≡? " ++ show r
 
-etaReduceMaybe :: Eq var => Neutral var -> Seq (Value var) -> var -> Maybe (Neutral var)
-etaReduceMaybe f spine var =
-  case Seq.viewr spine of
-    sp Seq.:> v | v == valueVar var, not (isVarAlive var (Elim (quoteNeutral (NApp f sp)))) ->
-      Just (NApp f sp)
-    _ -> Nothing
+instance (Hashable var, Eq var) => Hashable (Value var) where
+  hashWithSalt s = hashWithSalt s . quote
 
-nonLocalVars :: (Hashable var, Eq var) => Term var -> HashSet var
-nonLocalVars = goTerm mempty mempty where
-  goTerm !scope !free (Elim t) = goNeutral scope free t
-  goTerm !scope !free (Lam x t) = goTerm (HashSet.insert x scope) free t
-  goTerm !scope !free (Pi (Binder{var = v, domain = d}) r) =
-    goTerm (HashSet.insert v scope) (goTerm scope free d) r
-  goTerm !_ !x Set = x
-  goTerm !_ !x Prop = x
+instance (Eq var, Show var) => Show (Value var) where
+  show = show . quote
 
-  goNeutral !scope !free (Var v)
-    | HashSet.member v scope = free
-    | otherwise = HashSet.insert v free
-  goNeutral !_ !free (Con v) = HashSet.insert v free
-  goNeutral !_ !free Meta{} = free
-  goNeutral !scope !free (Cut a b) = goTerm scope (goTerm scope free a) b
-  goNeutral !scope !free (App f x) = goTerm scope (goNeutral scope free f) x
+instance Eq var => Eq (Value var) where
+  VNe a == VNe b = a == b
+  VFn var body == VFn var' body' = body (valueVar var') == body' (valueVar var)
+  VPi binder body == VPi binder' body' =
+       binder == binder'
+    && body (valueVar (var binder)) == body' (valueVar (var binder'))
+  VSet == VSet = True
+  VProp == VProp = True
+  _ == _ = False
+
+instance (Show var, Eq var) => Show (Neutral var) where
+  show = show . quoteNeutral

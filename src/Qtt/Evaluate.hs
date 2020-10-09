@@ -12,6 +12,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import Control.Monad.Reader (ReaderT(runReaderT))
 import Check.Fresh
 import Data.Hashable
+import Control.Comonad
 
 evaluate :: (MonadReader (Env a) m, Ord a, Show a, Fresh a) => Term a -> m (Value a)
 evaluate (Elim a) = evaluateNeutral a
@@ -24,6 +25,7 @@ evaluate (Pi bind b) = do
   pure (VPi bind (\arg -> evaluateArrow b (insertDecl (var bind) arg env)))
 evaluate Set  = pure VSet
 evaluate Prop = pure VProp
+evaluate (SpannedTerm x) = evaluate (extract x)
 
 evaluateArrow :: (Ord a, Show a, Fresh a) => Term a -> Env a -> Value a
 evaluateArrow = evaluate

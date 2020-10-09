@@ -11,6 +11,7 @@ import Control.Exception (throwIO)
 import qualified Text.Megaparsec.Char.Lexer as L
 
 import Qtt (Visibility(..))
+import Data.L
 
 loc :: Parser a -> Parser (L a)
 loc k = do

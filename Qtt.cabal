@@ -22,6 +22,7 @@ executable Qtt
                      , text
                      , rock
                      , some
+                     , comonad
                      , hashable
                      , containers
                      , megaparsec
@@ -32,7 +33,9 @@ executable Qtt
                      , unordered-containers
                      , dependent-sum-template
   other-modules:       Qtt
+                     , Qtt.Check
                      , Qtt.Pretty
+                     , Qtt.Builtin
                      , Qtt.Evaluate
                      , Qtt.Environment
 
@@ -47,11 +50,13 @@ executable Qtt
 
                      , Driver.Query
                      , Driver.Rules
+                     , Driver.WiredIn
 
                      , Presyntax
                      , Presyntax.Parser
                      , Presyntax.Lexer
 
-                     , Data.HashMap.Compat
+                     , Data.L
                      , Data.Range
+                     , Data.HashMap.Compat
   ghc-options:       -Wall -Wno-name-shadowing

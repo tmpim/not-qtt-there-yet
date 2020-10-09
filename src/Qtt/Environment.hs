@@ -21,27 +21,30 @@ import qualified Data.HashMap.Strict as Map
 import qualified Data.HashSet as Set
 import Data.HashMap.Strict (HashMap)
 import Data.Sequence
+import Data.Hashable
 import Data.HashSet (HashSet)
 import Data.Range
-
-import Presyntax (L(..))
+import Data.L (L(..))
 
 import Qtt
 import Check.Fresh
-import Data.Hashable
+import Check.TypeError
 
 data Env a =
   Env
     { assumptions   :: HashMap a (Value a)
     , declarations  :: HashMap a (Value a)
     , modules       :: HashMap a (Env a)
-    , locationStack :: [Range]
     , unproven      :: HashMap a (L ())
     , toplevel      :: HashSet a
     , constructors  :: HashSet a
+    
 
-    , unsolvedMetas :: MVar (HashSet (Meta a))
-    , deferredEqns  :: MVar (HashMap (Meta a) (Seq (Constraint a)))
+    , locationStack :: [Range]
+
+    , unsolvedMetas   :: MVar (HashSet (Meta a))
+    , deferredEqns    :: MVar (HashMap (Meta a) (Seq (Constraint a)))
+    , recoveredErrors :: MVar (HashSet (TypeError a, [Range]))
 
     , reporterFunction :: forall m. (MonadIO m, MonadReader (Env a) m) => String -> m ()
 
@@ -57,9 +60,27 @@ emptyEnvWithReporter :: (MonadIO m, Ord a, Hashable a)
                      -> (forall m. (MonadIO m, MonadReader (Env a) m) => String -> m ())
                      -> m (Env a)
 emptyEnvWithReporter path report = do
-  unsolved <- liftIO (newMVar mempty)
-  deferred <- liftIO (newMVar mempty)
-  pure $ Env mempty mempty mempty mempty mempty mempty mempty unsolved deferred report path Nothing
+  unsolved  <- liftIO (newMVar mempty)
+  deferred  <- liftIO (newMVar mempty)
+  recovered <- liftIO (newMVar mempty)
+  pure $
+    Env { assumptions = mempty
+        , declarations = mempty
+        , modules = mempty
+        , locationStack = mempty
+        , unproven = mempty
+        , toplevel = mempty
+        , constructors = mempty
+
+        , unsolvedMetas = unsolved
+        , deferredEqns = deferred
+        , recoveredErrors = recovered
+
+        , reporterFunction = report
+
+        , currentModule = path
+        , currentlyChecking = Nothing
+        }
 
 report :: (MonadIO m, MonadReader (Env a) m) => String -> m ()
 report s = ($ s) =<< asks reporterFunction

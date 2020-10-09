@@ -23,6 +23,7 @@ import Check.Data
 import Qtt.Evaluate
 import Driver.Query
 import qualified Data.Text as T
+import qualified Data.L as P
 
 
 checkLoc :: TypeCheck a m => P.ExprL a -> Value a -> m (Term a)
@@ -122,8 +123,9 @@ checkDeclLoc = flip withLocation checkDeclRaw
 
 checkDeclRaw :: TypeCheck var m => P.Decl P.L var -> m (m b -> m b)
 checkDeclRaw (P.TypeSig var ty) = do
-  c <- checkLoc ty VSet
-  nf_c <- evaluate c
+  nf_c <- recover VSet $ do
+    c <- checkLoc ty VSet
+    evaluate c
   pure ( assume var nf_c
        . local (\x -> x { unproven = Map.insert var (P.L () (P.lRange ty)) (unproven x)
                         , toplevel = Set.insert var (toplevel x) }))
@@ -134,7 +136,7 @@ checkDeclRaw (P.Value var dec) = do
   ty <- lookupType var
   case ty of
     Just sig -> do
-      c <- checkLoc dec sig
+      c <- recoverQ sig $ checkLoc dec sig
       nf_c <- evaluate c
       pure (local (insertDecl var nf_c . prove))
     Nothing -> do

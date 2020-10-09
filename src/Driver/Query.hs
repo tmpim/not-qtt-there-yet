@@ -23,19 +23,22 @@ import Data.IORef
 import Data.GADT.Show
 import Qtt.Environment
 import Data.HashSet (HashSet)
+import Data.L
+import Qtt.Builtin
 
 data Query var a where
-  GoalFiles    :: Query var [FilePath]
-  Persistent   :: Query var (IORef (PersistentState var))
+  GoalFiles     :: Query var [FilePath]
+  Persistent    :: Query var (IORef (PersistentState var))
 
-  ModuleText   :: FilePath -> Query var [T.Text]
-  ModuleCode   :: FilePath -> Query var [L (Decl L var)]
-  ModuleMap    :: FilePath -> Query var (ModuleMap var)
-  ModuleEnv    :: FilePath -> Query var (Env var)
+  ModuleText    :: FilePath -> Query var [T.Text]
+  ModuleCode    :: FilePath -> Query var [L (Decl L var)]
+  ModuleMap     :: FilePath -> Query var (ModuleMap var)
+  ModuleEnv     :: FilePath -> Query var (Env var)
 
   UnsolvedMetas :: Query var (HashSet (Meta var))
 
   Zonked        :: Value var -> Query var (Value var)
+  MakeBuiltin   :: Builtin var kit -> Query var kit
 
 instance (Eq var, Hashable var) => Hashable (Query var a) where
   hashWithSalt salt = \case
@@ -46,7 +49,8 @@ instance (Eq var, Hashable var) => Hashable (Query var a) where
     ModuleMap s     -> hashWithSalt (hashWithSalt salt (3 :: Int)) s
     ModuleEnv s     -> hashWithSalt (hashWithSalt salt (4 :: Int)) s
     UnsolvedMetas   -> hashWithSalt salt (5 :: Int)
-    Zonked s        -> hashWithSalt (hashWithSalt salt (5 :: Int)) (quote s)
+    Zonked s        -> hashWithSalt (hashWithSalt salt (6 :: Int)) (quote s)
+    MakeBuiltin s   -> hashWithSalt (hashWithSalt salt (7 :: Int)) s
 
 instance (Eq var, Hashable var) => Hashable (Some (Query var)) where
   hashWithSalt salt (Some x) = hashWithSalt salt x
@@ -99,5 +103,11 @@ instance Eq var => GEq (Query var) where
     | otherwise = Nothing
   geq (ModuleMap a) (ModuleMap b)
     | a == b    = Just Refl
+    | otherwise = Nothing
+  geq (Zonked a) (Zonked b)
+    | a == b    = Just Refl
+    | otherwise = Nothing
+  geq (MakeBuiltin a) (MakeBuiltin b)
+    | Just Refl <- geq a b = Just Refl
     | otherwise = Nothing
   geq _ _ = Nothing

@@ -1,3 +1,4 @@
+{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -29,36 +30,57 @@ import Control.Exception (throwIO)
 import Control.Monad.Reader (ask)
 import Control.Concurrent
 import Qtt.Evaluate (zonk)
+import Data.L
+import Driver.WiredIn
+import qualified Data.HashSet as HashSet
+import Data.Foldable
+import Check.TypeError
+import Data.HashSet (HashSet)
 
 
-rules :: IORef (PersistentState Var) -> [String] -> Rock.Rules (Query Var)
-rules persistent files = \case
-  GoalFiles -> pure files
-  Persistent -> pure persistent
+rules :: IORef (PersistentState Var)
+      -> [String]
+      -> Rock.GenRules (Rock.Writer (HashSet (TypeError Var, [Range])) (Query Var))
+                       (Query Var)
+rules persistent files (Rock.Writer q) = case q of
+  GoalFiles -> noFail $ pure files
+  Persistent -> noFail $ pure persistent
 
-  ModuleText file -> do
+  ModuleText file -> noFail do
     contents <- liftIO $ T.readFile file
     pure (T.lines contents)
 
-  ModuleCode file -> do
+  ModuleCode file -> noFail do
     lines <- T.unlines <$> Rock.fetch (ModuleText file)
     t <- liftIO (parseFileIO file lines)
     pure t
 
-  ModuleMap path -> do
+  ModuleMap path -> noFail do
     code <- Rock.fetch (ModuleCode path)
     pure (foldr addDefToMM (MM mempty mempty mempty mempty mempty) code)
 
   ModuleEnv path -> do
     code <- Rock.fetch (ModuleCode path)
     env <- emptyEnv path
-    runCheckerOrFail (checkProgram code ask) env
+    t <- runCheckerOrFail (checkProgram code ask) env
+    case t of
+      (Nothing, e) -> pure (env, e)
+      (Just x, e) -> pure (x, e)
 
-  UnsolvedMetas -> liftIO $ do
+  UnsolvedMetas -> noFail . liftIO $ do
     p <- readIORef persistent 
     readMVar (psUnsolved p)
 
-  Zonked v -> runCheckerOrFail (zonk v) =<< emptyEnv ""
+  Zonked v -> do
+    t <- runCheckerOrFail (zonk v) =<< emptyEnv ""
+    case t of
+      (Nothing, e) -> error $ "Error in zonking: " ++ show e
+      (Just x, _) -> pure (x, mempty)
+
+  MakeBuiltin b -> noFail $ makeBuiltin b
+
+noFail :: (Monoid w, Functor f) => f a -> f (a, w)
+noFail = fmap (flip (,) mempty)
 
 checkFile :: FilePath -> Rock.Task (Query Var) ()
 checkFile path = do
@@ -74,15 +96,22 @@ findCon c ((c',v,v'):s)
   | c == c' = pure (v, v')
   | otherwise = findCon c s
 
-runCheckerOrFail :: TCM Var a -> Env Var -> Rock.Task (Query Var) a
+runCheckerOrFail :: TCM Var a
+                 -> Env Var
+                 -> Rock.Task (Query Var)
+                      (Maybe a, HashSet (TypeError Var, [Range]))
 runCheckerOrFail c env = do
   pvar <- Rock.fetch Persistent
+  recovered <- liftIO $ newMVar mempty
   p <- liftIO $ readIORef pvar
-  e <- runChecker c env{ unsolvedMetas = psUnsolved p, deferredEqns = psDeferred p }
+  e <- runChecker c env{ unsolvedMetas = psUnsolved p
+                       , deferredEqns = psDeferred p
+                       , recoveredErrors = recovered }
   case e of
-    Left (err, span) -> liftIO $ throwIO (Teer err span)
+    Left (err, span) -> pure (Nothing, HashSet.singleton (err, span))
     Right x -> do
-      pure x
+      rec <- liftIO $ takeMVar recovered
+      pure (Just x, rec)
 
 addDefToMM :: L (Decl L Var) -> ModuleMap Var -> ModuleMap Var
 addDefToMM (L (TypeSig v t) _) x =

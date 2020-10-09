@@ -15,7 +15,7 @@ import Control.Exception (catch)
 import qualified Data.Text.IO as T
 import qualified Data.Text as T
 import qualified Data.HashSet as HashSet
-import Data.Foldable (traverse_, for_)
+import Data.Foldable (for_)
 import Data.IORef
 
 import Data.Range
@@ -34,10 +34,12 @@ import Driver.Rules (checkFile, rules)
 import Driver.Query
 import Presyntax
 
-import Check.TypeError (TypeError)
+import Check.TypeError
 import Check.Monad
 
 import Prelude hiding (putStrLn, putStr, print)
+import Data.HashSet (HashSet)
+import Qtt.Builtin
 
 
 main :: IO ()
@@ -49,11 +51,16 @@ main =
     cycles <- newIORef mempty
     persistent <- newIORef =<< emptyPState
 
-    let rules' = Rock.memoiseWithCycleDetection memoMap cycles (rules persistent files)
+    let rules' =
+          Rock.memoiseWithCycleDetection memoMap cycles
+          $ Rock.writer reportError
+          $ rules persistent files
 
     for_ files $ \f -> forkIO $ do
-      print =<< Rock.runTask (Rock.traceFetch (liftIO . traceReq) (\_ _ -> pure ()) rules') (checkFile f)
+      print =<< Rock.runTask rules' (checkFile f)
+
     Rock.runTask rules' (reportUnsolved =<< Rock.fetch UnsolvedMetas)
+
   `catch` \case
     Tee e -> error $ "Internal error: " ++ show e
     Teer e (r:_) -> do
@@ -61,6 +68,19 @@ main =
       _ <- printRange lines r
       print (e :: TypeError Var)
     Teer e _ -> error $ "Internal error: " ++ show e
+
+reportError :: Query Var a2 -> HashSet (TypeError Var, [Range]) -> Rock.Task (Query Var) ()
+reportError _ errs = do
+  for_ (HashSet.toList errs) $ \(e, r) -> do
+    fail <- builtinName <$> Rock.fetch (MakeBuiltin BuiltinFail)
+    case e of
+      NotEqual a b | isVarAlive fail (quote a) || isVarAlive fail (quote b) -> do
+        pure ()
+      _ -> do
+        lines <- Rock.fetch (ModuleText (rangeFile (head r)))
+        liftIO $ do
+          _ <- printRange lines (head r)
+          print (e :: TypeError Var)
 
 traceReq :: Query Var a1 -> IO ()
 traceReq v = do

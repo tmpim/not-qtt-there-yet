@@ -25,6 +25,7 @@ import Data.Foldable (for_)
 import Check.Fresh
 import Control.Monad.Reader (asks)
 import Data.Hashable
+import Control.Comonad
 
 
 subsumes :: TypeCheck a m
@@ -188,6 +189,7 @@ checkScope set (Pi binder range) = do
 checkScope set (Lam var body) = checkScope (Set.insert var set) body
 checkScope _ Set{} = pure ()
 checkScope _ Prop{} = pure ()
+checkScope set (SpannedTerm s) = checkScope set (extract s)
 
 isPattern :: (Ord a, Hashable a) => Seq (Value a) -> Maybe (HashSet a)
 isPattern = go mempty where
