@@ -26,24 +26,22 @@ import Qtt
 import Data.Range
 import Presyntax.Lexer
 import Data.IORef
-import Control.Exception (throwIO)
 import Control.Monad.Reader (ask)
 import Control.Concurrent
 import Qtt.Evaluate (zonk)
 import Data.L
 import Driver.WiredIn
 import qualified Data.HashSet as HashSet
-import Data.Foldable
 import Check.TypeError
 import Data.HashSet (HashSet)
 
 
 rules :: IORef (PersistentState Var)
-      -> [String]
+      -> IORef [String]
       -> Rock.GenRules (Rock.Writer (HashSet (TypeError Var, [Range])) (Query Var))
                        (Query Var)
 rules persistent files (Rock.Writer q) = case q of
-  GoalFiles -> noFail $ pure files
+  GoalFiles -> noFail . liftIO $ readIORef files
   Persistent -> noFail $ pure persistent
 
   ModuleText file -> noFail do
@@ -69,7 +67,7 @@ rules persistent files (Rock.Writer q) = case q of
 
   UnsolvedMetas -> noFail . liftIO $ do
     p <- readIORef persistent 
-    readMVar (psUnsolved p)
+    pure (psUnsolved p)
 
   Zonked v -> do
     t <- runCheckerOrFail (zonk v) =<< emptyEnv ""

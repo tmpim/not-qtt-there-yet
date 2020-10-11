@@ -2,3 +2,6 @@
 .vscode
 *.hi
 *.o
+
+dist
+dist-newstyle

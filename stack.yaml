@@ -9,3 +9,5 @@ extra-deps:
 - dependent-hashmap-0.1.0.1@sha256:6d1c20bd79f32d8daebd3cc741f884cc3d093118e3b876eb957defd4c594a966,1892
 - dependent-sum-0.7.1.0@sha256:5599aa89637db434431b1dd3fa7c34bc3d565ee44f0519bfbc877be1927c2531,2068
 - dependent-sum-template-0.1.0.3@sha256:0bbbacdfbd3abf2a15aaf0cf2c27e5bdd159b519441fec39e1e6f2f54424adde,1682
+- haskell-lsp-0.23.0.0
+- haskell-lsp-types-0.23.0.0@sha256:b15d9c2aff8b8145797f5fa6771910b986d2456eccb30c3de69b75d4768cd12d,3027

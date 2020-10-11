@@ -38,7 +38,6 @@ data Env a =
     , unproven      :: HashMap a (L ())
     , toplevel      :: HashSet a
     , constructors  :: HashSet a
-    
 
     , locationStack :: [Range]
 

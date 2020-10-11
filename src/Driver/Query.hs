@@ -35,7 +35,7 @@ data Query var a where
   ModuleMap     :: FilePath -> Query var (ModuleMap var)
   ModuleEnv     :: FilePath -> Query var (Env var)
 
-  UnsolvedMetas :: Query var (HashSet (Meta var))
+  UnsolvedMetas :: Query var (MVar (HashSet (Meta var)))
 
   Zonked        :: Value var -> Query var (Value var)
   MakeBuiltin   :: Builtin var kit -> Query var kit

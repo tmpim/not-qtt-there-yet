@@ -1,0 +1,65 @@
+{
+    "name": "qtt",
+    "displayName": "qtt",
+    "description": "Qtt language support",
+    "version": "0.0.1",
+    "engines": {
+        "vscode": "^1.49.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "activationEvents": [
+        "onLanguage:qtt",
+        "onCommand:qtt.*"
+    ],
+    "main": "./client/out/main",
+    "contributes": {
+        "languages": [
+            {
+                "id": "qtt",
+                "aliases": [
+                    "Quantitative Type Theory",
+                    "qtt"
+                ],
+                "extensions": [
+                    "tt"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "qtt",
+                "scopeName": "source.tt",
+                "path": "./syntaxes/qtt.tmLanguage.json"
+            }
+        ],
+        "commands": [
+            {
+                "command": "qtt.restartServer",
+                "title": "Qtt: Restart server"
+            }
+        ],
+        "configuration": {
+            "type": "object",
+            "title": "Qtt",
+            "properties": {
+                "qtt.qttLsExecutable": {
+                    "scope": "window",
+                    "type": "string",
+                    "default": "qtt-ls",
+                    "description": "Path to the Qtt language server"
+                }
+            }
+        }
+    },
+	"scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -b",
+        "watch": "tsc -b -w"
+    },
+    "devDependencies": {
+        "typescript": "^4.0.2"
+    }
+}

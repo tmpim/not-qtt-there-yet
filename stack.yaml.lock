@@ -39,6 +39,20 @@ packages:
       sha256: 32eeadeb991a290a1da41ce7e995dee7d38ebba3bd3e53ea8074c32c086701fd
   original:
     hackage: dependent-sum-template-0.1.0.3@sha256:0bbbacdfbd3abf2a15aaf0cf2c27e5bdd159b519441fec39e1e6f2f54424adde,1682
+- completed:
+    hackage: haskell-lsp-0.23.0.0@sha256:b782cb24ca62510f4eb698f778f7e6dac6419a5ac8fb8dc67bdffe4ae04ae42d,5315
+    pantry-tree:
+      size: 1728
+      sha256: 6b771d8621ab5f32e40e9afce84adda3d23b7fc2996400086a71f93a5e14a197
+  original:
+    hackage: haskell-lsp-0.23.0.0
+- completed:
+    hackage: haskell-lsp-types-0.23.0.0@sha256:b15d9c2aff8b8145797f5fa6771910b986d2456eccb30c3de69b75d4768cd12d,3027
+    pantry-tree:
+      size: 2531
+      sha256: 05b1b98ac79e2dee2d7893c30a8c47d21d4db2e099c07dcbd5d642ff54be30ef
+  original:
+    hackage: haskell-lsp-types-0.23.0.0@sha256:b15d9c2aff8b8145797f5fa6771910b986d2456eccb30c3de69b75d4768cd12d,3027
 snapshots:
 - completed:
     size: 532382

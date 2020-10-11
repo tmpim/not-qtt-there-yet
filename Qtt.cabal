@@ -19,9 +19,11 @@ executable Qtt
   default-language:    Haskell2010
   build-depends:       base >= 4.7 && < 5
                      , mtl
+                     , stm
                      , text
                      , rock
                      , some
+                     , lens
                      , comonad
                      , hashable
                      , containers
@@ -32,8 +34,11 @@ executable Qtt
                      , transformers-base
                      , unordered-containers
                      , dependent-sum-template
+
+                     , haskell-lsp
+                     , data-default
+                     , haskell-lsp-types
   other-modules:       Qtt
-                     , Qtt.Check
                      , Qtt.Pretty
                      , Qtt.Builtin
                      , Qtt.Evaluate
@@ -51,6 +56,7 @@ executable Qtt
                      , Driver.Query
                      , Driver.Rules
                      , Driver.WiredIn
+                     , Driver.LanguageServer.Main
 
                      , Presyntax
                      , Presyntax.Parser

@@ -183,8 +183,8 @@ instance (Eq a, Show a) => Show (Term a) where
           showBracket Invisible k = showChar '{' . k . showChar '}'
 
 instance (Eq a, Show a) => Show (Elim a) where
-  showsPrec _ (Var x) = showString "\x1b[1;32m" . shows x . showString "\x1b[0m"
-  showsPrec _ (Con x) = showString "\x1b[1;31m" . shows x . showString "\x1b[0m"
+  showsPrec _ (Var x) = shows x
+  showsPrec _ (Con x) = shows x
   showsPrec _ (Meta v) = shows v
   showsPrec _ (Cut a b) = showChar '(' . showsPrec 1 a . showString " : " . shows b . showChar ')'
   showsPrec prec x =

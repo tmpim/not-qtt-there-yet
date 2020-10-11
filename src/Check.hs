@@ -146,42 +146,42 @@ checkDeclRaw (P.Value var dec) = do
 
 checkDeclRaw (P.DataStmt (P.DataDecl name dataParams dataKind dataCons)) = do
   local (\x -> x { currentlyChecking = Just name, constructors = Set.insert name (constructors x) }) $ do
-  let eliminator = derive ".elim" name
+    let eliminator = derive ".elim" name
 
-  params <- checkTelescope dataParams . flip withLocation $ \(name, sort) -> do
-    sort <- checkLoc sort VSet
-    sort_nf <- evaluate sort
-    pure (name, sort_nf)
+    params <- checkTelescope dataParams . flip withLocation $ \(name, sort) -> do
+      sort <- checkLoc sort VSet
+      sort_nf <- evaluate sort
+      pure (name, sort_nf)
 
-  let param_pi_tel v = fmap (\(a, b) -> Binder a v (quote b)) params
+    let param_pi_tel v = fmap (\(a, b) -> Binder a v (quote b)) params
 
-  (sorts, the_data) <- assuming params $ do
-    kind <- checkLoc dataKind VSet
-    kind_nf <- evaluate kind
-    closed <- evaluate (quantify (param_pi_tel Visible) kind)
+    (sorts, the_data) <- assuming params $ do
+      kind <- checkLoc dataKind VSet
+      kind_nf <- evaluate kind
+      closed <- evaluate (quantify (param_pi_tel Visible) kind)
 
-    constrs <- assume name closed . local (\x -> x { constructors = Set.insert name (constructors x)}) $ do
-      for dataCons . flip withLocation $ \(name, sort) -> do
-        sort <- checkLoc sort VSet
-        sort_nf <- evaluate sort
-        pure (name, sort, sort_nf)
-    
-    visibleSorts <- traverse (\(a, b, _) -> (,) a <$> evaluate (quantify (param_pi_tel Invisible) b)) constrs
-    pure ((name, closed):visibleSorts, Data name params kind_nf (map (\(a, _, b) -> (a, b)) constrs))
+      constrs <- assume name closed . local (\x -> x { constructors = Set.insert name (constructors x)}) $ do
+        for dataCons . flip withLocation $ \(name, sort) -> do
+          sort <- checkLoc sort VSet
+          sort_nf <- evaluate sort
+          pure (name, sort, sort_nf)
+      
+      visibleSorts <- traverse (\(a, b, _) -> (,) a <$> evaluate (quantify (param_pi_tel Invisible) b)) constrs
+      pure ((name, closed):visibleSorts, Data name params kind_nf (map (\(a, _, b) -> (a, b)) constrs))
 
-  fakeCons <- for dataCons . flip withLocation $ \(name, _) -> do
-    ignored <- refresh name
-    pure (constN ignored (length params) (VNe (NCon name)))
+    fakeCons <- for dataCons . flip withLocation $ \(name, _) -> do
+      ignored <- refresh name
+      pure (constN ignored (length params) (VNe (NCon name)))
 
-  induction <- makeInductionPrinciple the_data
-  recursor <- makeRecursor eliminator the_data
+    induction <- makeInductionPrinciple the_data
+    recursor <- makeRecursor eliminator the_data
 
-  pure ( assume name (snd (head sorts))
-       . foldr (\((a, b), c) r -> declare a b c . r) id (zip (tail sorts) fakeCons)
-       . declare eliminator induction recursor
-       . local (\x -> x { toplevel     = Set.union (Set.fromList (eliminator:map fst sorts)) (toplevel x)
-                        , constructors = Set.union (Set.fromList (map fst sorts)) (constructors x) })
-       )
+    pure ( assume name (snd (head sorts))
+        . foldr (\((a, b), c) r -> declare a b c . r) id (zip (tail sorts) fakeCons)
+        . declare eliminator induction recursor
+        . local (\x -> x { toplevel     = Set.union (Set.fromList (eliminator:map fst sorts)) (toplevel x)
+                          , constructors = Set.union (Set.fromList (map fst sorts)) (constructors x) })
+        )
 
 checkDeclRaw (P.Include file) = do
   theirs <- fetchTC (ModuleEnv (T.unpack (P.lThing file)))
