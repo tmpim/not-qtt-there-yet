@@ -1,9 +1,13 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
-module Driver.LanguageServer.Main where
+module Driver.Editor.Main where
 
 import qualified Language.Haskell.LSP.Control as Ctrl
 import qualified Language.Haskell.LSP.Core as L
@@ -14,49 +18,53 @@ import qualified Language.Haskell.LSP.Core as Core
 import Language.Haskell.LSP.Messages
 import Language.Haskell.LSP.Core
 
-import Control.Monad.IO.Class
+import Control.Monad.Trans.Control
+import Control.Monad.Reader
+import Control.Exception (catch)
 import Control.Concurrent.STM
 import Control.Concurrent
-import Control.Monad
 import Control.Lens
 
+import qualified Data.HashMap.Compat as HashMap
 import qualified Data.HashSet as HashSet
+import qualified Data.Sequence as Seq
 import qualified Data.Text as T
-import Data.Default
+import Data.HashMap.Compat (HashMap)
 import Data.HashSet ( HashSet )
-import Data.Range
-import Data.IORef
+import Data.Traversable
+import Data.Sequence (Seq)
 import Data.Foldable
+import Data.Default
+import Data.IORef
+import Data.Range
+import Data.Void
 
+import Check.TypeError
 import Driver.Rules
 import Driver.Query
-import Check.TypeError
+
+import Qtt
 
 import Presyntax.Lexer (ParseException(..))
 import Presyntax (Var)
 
-import Text.Megaparsec.Pos
+import Text.Megaparsec hiding (State)
 
 import qualified Rock
-import Qtt
-import Control.Monad.Trans.Control (control)
-import Control.Exception (catch)
-import Text.Megaparsec.Error
-import Data.Void
-import Text.Megaparsec hiding (State)
-import Data.Sequence (Seq)
-import qualified Data.Sequence as Seq
-import Data.HashMap.Compat (HashMap)
-import qualified Data.HashMap.Compat as HashMap
-import Control.Monad.Reader
-import Data.Traversable
+import Data.Aeson
+import Driver.Editor.Monad
+import Driver.Editor.Refine
+import qualified Language.Haskell.LSP.VFS as L
+import qualified Data.Text.IO as T
 
 runLSP :: IO ()
 runLSP = do
-  rin        <- atomically newTChan
-  persistent <- newIORef =<< emptyPState
-  files      <- newIORef mempty
-  errorBuckets <- newMVar (mempty :: HashMap FilePath (Seq L.Diagnostic))
+  rin              <- atomically newTChan
+  persistent       <- newIORef =<< emptyPState
+  files            <- newIORef mempty
+  errorBuckets     <- newMVar mempty
+  pendingCallbacks <- newMVar mempty
+  versions         <- newMVar mempty
 
   let
     callbacks =
@@ -65,24 +73,21 @@ runLSP = do
         , L.onInitialConfiguration = const (pure ())
         , L.onStartup = \funs -> do
             let
+              reader p = L.getVirtualFileFunc funs (L.toNormalizedUri (L.filePathToUri p)) >>= \case
+                Nothing -> liftIO (T.readFile p)
+                Just t -> pure (L.virtualFileText t)
+
               rules' = Rock.writer (addErrorsToBucket errorBuckets)
                      $ Rock.traceFetch (traceFetch funs) (\_ _ -> pure ())
-                     $ rules persistent files
+                     $ rules persistent files reader
               rules' :: Rock.Rules (Query Var)
 
-              state = State funs errorBuckets
+              state = State funs errorBuckets pendingCallbacks versions
             _ <- forkIO (runReaderT (messageHandler rules' rin) state)
             pure Nothing
         }
   t <- Ctrl.run callbacks (lspHandlers rin) lspOptions Nothing
   print t
-
-data State =
-  State { stateFuns :: LspFuncs ()
-        , stateErrs :: MVar (HashMap FilePath (Seq L.Diagnostic))
-        }
-
-type QttM = ReaderT State (Rock.Task (Query Var))
 
 addErrorsToBucket :: MVar (HashMap FilePath (Seq L.Diagnostic)) -> Query Var a -> HashSet (TypeError Var, [Range]) -> Rock.Task (Query Var) ()
 addErrorsToBucket var (ModuleEnv path) errs = do
@@ -99,17 +104,22 @@ traceFetch funs (Rock.Writer q) = liftIO (sendErrorLogS (L.sendFunc funs) (T.pac
 lspHandlers :: TChan FromClientMessage -> Handlers
 lspHandlers chan =
   def { L.initializedHandler = Just $ sendMessage . L.NotInitialized
+      , L.codeActionHandler = Just $ sendMessage . L.ReqCodeAction
+
       , L.hoverHandler = Just $ sendMessage . L.ReqHover
 
       , L.didOpenTextDocumentNotificationHandler = Just $ sendMessage . L.NotDidOpenTextDocument
       , L.didChangeTextDocumentNotificationHandler = Just $ sendMessage . L.NotDidChangeTextDocument
       , L.didSaveTextDocumentNotificationHandler = Just $ sendMessage . L.NotDidSaveTextDocument
       , L.didCloseTextDocumentNotificationHandler = Just $ sendMessage . L.NotDidCloseTextDocument
+
+      , L.executeCommandHandler = Just $ sendMessage . L.ReqExecuteCommand
       }
   where sendMessage = atomically . writeTChan chan
 
 lspOptions :: L.Options
 lspOptions = def { Core.textDocumentSync = Just syncOptions
+                 , Core.executeCommandCommands = Just [T.pack "qtt:refresh"]
                  }
 
 syncOptions :: L.TextDocumentSyncOptions
@@ -137,36 +147,22 @@ errorToDiagnostic (e, rs) =
                    , L._tags = Nothing
                    }
 
-rangeToRange :: Range -> L.Range
-rangeToRange r = L.Range { _start = p2p (rangeStart r), _end = p2p (rangeEnd r) } where
-  p2p :: SourcePos -> L.Position
-  p2p s = L.Position { _line = unPos (sourceLine s) - 1, _character = unPos (sourceColumn s) - 1}
 
 messageHandler :: Rock.Rules (Query Var) -> TChan FromClientMessage -> ReaderT State IO ()
 messageHandler rules chan = do
   t <- ask
   forever $ do
     msg <- liftIO $ atomically (readTChan chan)
-    liftIO $ Rock.runTask rules . flip runReaderT t $ do
-      liftIO . flip swapMVar mempty =<< Rock.fetch UnsolvedMetas
+    liftIO . Rock.runTask rules . flip runReaderT t $ do
+      logInfo ("Responding to: " ++ show msg)
       handleRequest msg
-      -- maybePublishUnsolvedMetas lf
 
 unsolvedMetavariables :: QttM [L.Diagnostic]
 unsolvedMetavariables = do
   t <- liftIO . readMVar =<< Rock.fetch UnsolvedMetas
   for (HashSet.toList t) $ \meta -> do
-    zonked <- Rock.fetch (Zonked (metaExpected meta))
-
-    let dropT (Binder{Qtt.var = v}:bs) (VPi _ rng) = dropT bs (rng (valueVar v))
-        dropT [] t = t
-        dropT _ _ = undefined
-
-        metaT = dropT (metaTelescope meta) zonked
-
-    let
-      msg = T.unlines [ "Unsolved metavariable of type " <> T.pack (show metaT) ]
-
+    zonked <- Rock.fetch (Zonked (metaGoal meta))
+    let msg = T.unlines [ "Unsolved metavariable of type " <> T.pack (show zonked) ]
     pure $
       L.Diagnostic { L._range = rangeToRange (metaLocation meta)
                    , L._severity = Just L.DsWarning
@@ -181,19 +177,68 @@ rangeUri :: Range -> L.Uri
 rangeUri = L.filePathToUri . rangeFile
 
 handleRequest :: FromClientMessage -> QttM ()
-handleRequest (NotDidOpenTextDocument not)   = handleFileChange not
-handleRequest (NotDidChangeTextDocument not) = handleFileChange not
-handleRequest (NotDidSaveTextDocument not)   = handleFileChange not
+handleRequest (NotDidOpenTextDocument not)   = handleFileChange Nothing not
+handleRequest (NotDidChangeTextDocument not) = handleFileChange vers not where
+  vers = not ^. L.params . L.textDocument . L.version
+handleRequest (NotDidSaveTextDocument not)   = handleFileChange Nothing not
 
-handleRequest _ = pure ()
+handleRequest (ReqCodeAction msg) = handleCodeActionRequest msg
+handleRequest (ReqExecuteCommand msg) = do
+  let params = msg ^. L.params
+  case (params ^. L.command, params ^. L.arguments) of
+    ("qtt:refresh", Just (L.List [fromJSON -> Success u])) -> do
+      logInfo $ "Handling refresh command for " ++ show u
+      let fakeNotif = L.DidSaveTextDocumentParams (L.TextDocumentIdentifier u)
+      handleFileChange Nothing (L.NotificationMessage undefined undefined fakeNotif)
+    _ -> error "Unknown command"
+
+handleRequest (ReqHover msg) = do
+  let
+    uri = msg ^. L.params . L.textDocument . L.uri
+  case L.uriToFilePath uri of
+    Just fp -> do
+      let pos = positionFromPosition fp (msg ^. L.params . L.position)
+      t <- Rock.fetch (ModuleAnnot fp pos)
+      logInfo $ "All intervals for position: " ++ show pos ++ ": " ++ show t
+      case t of
+        [] -> sendMessage msg L.RspHover Nothing
+        _:_ -> do
+          ty <- Rock.fetch (Zonked (last t))
+          let markup = L.MarkupContent L.MkPlainText (T.pack (show ty))
+          sendMessage msg L.RspHover (Just (L.Hover (L.HoverContents markup) Nothing))
+    Nothing -> sendMessage msg L.RspHover Nothing
+
+handleRequest _req = logInfo (show _req)
+
+handleCodeActionRequest :: L.CodeActionRequest -> QttM ()
+handleCodeActionRequest msg =
+  let L.CodeActionParams{..} = msg ^. L.params in
+  case L.uriToFilePath (_textDocument ^. L.uri) of
+    Just fp -> do
+      logInfo (show _textDocument)
+      let range = rangeFromRange fp _range
+      t <- liftIO . readMVar =<< Rock.fetch UnsolvedMetas
+      let
+        metaInRange m = includes (metaLocation m) range
+        metas = toList (HashSet.filter metaInRange t)
+      case metas of
+        [x] -> do
+          logInfo $ "Oferring refinements for " ++ show (metaGoal x)
+          refinements <- offerRefinements (_textDocument ^. L.uri) (toList (_context ^. L.diagnostics)) x
+          sendMessage msg L.RspCodeAction (L.List refinements)
+        _ -> sendMessage msg L.RspCodeAction (L.List [])
+    Nothing -> sendMessage msg L.RspCodeAction (L.List [])
 
 handleFileChange :: (L.HasUri a1 L.Uri, L.HasTextDocument a2 a1, L.HasParams s a2)
-                 => s
+                 => Maybe Int
+                 -> s
                  -> QttM ()
-handleFileChange not = do
+handleFileChange version not = do
   let uri = not ^. L.params . L.textDocument . L.uri
-  fn <- asks (L.sendFunc . stateFuns)
-  liftIO $ L.sendErrorLogS fn "reloading"
+  logInfo $ "Reloading " ++ show uri
+  -- Invalidate unsolved metavariables:
+  _ <- liftIO . flip swapMVar mempty =<< Rock.fetch UnsolvedMetas
+
   case L.uriToFilePath uri of
     Just fp -> guardParseError fp () $ do
       buckets <- asks stateErrs
@@ -207,7 +252,11 @@ handleFileChange not = do
       metas <- unsolvedMetavariables
       publishDiagnostics (L.filePathToUri fp) (toList errs ++ metas)
 
-      pure ()
+      case version of
+        Just x -> do
+          vers <- asks stateVersions
+          liftIO . modifyMVar_ vers $ pure . HashMap.insert uri x
+        Nothing -> pure ()
     Nothing -> pure ()
 
 guardParseError :: FilePath -> a -> QttM a -> QttM a
@@ -232,11 +281,3 @@ errorBundleToDiags err (state, list) =
                           , L._tags = Nothing
                           }
    in (state', diag:list)
-
-publishDiagnostics :: L.Uri -> [L.Diagnostic] -> QttM ()
-publishDiagnostics here diagnostics = do
-  fn <- asks (L.sendFunc . stateFuns)
-  liftIO . fn $
-    L.NotPublishDiagnostics $
-    L.NotificationMessage "2.0" L.TextDocumentPublishDiagnostics $
-    L.PublishDiagnosticsParams here (L.List diagnostics)

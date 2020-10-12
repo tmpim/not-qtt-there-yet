@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Driver.LanguageServer.Main ( runLSP )
+import Driver.Editor.Main ( runLSP )
 
 main :: IO ()
 main = runLSP

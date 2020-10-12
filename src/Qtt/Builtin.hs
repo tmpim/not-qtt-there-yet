@@ -1,14 +1,19 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE DeriveGeneric #-}
 module Qtt.Builtin where
 
 import Data.GADT.Compare ( GEq(..) )
-import Type.Reflection ( (:~:)(Refl) )
+import Data.Dependent.HashMap
+import Data.Hashable
+
+import GHC.Generics (Generic)
 
 import Qtt
-import Data.Hashable
-import Data.Dependent.HashMap
+
+import Type.Reflection ( (:~:)(Refl) )
+
 
 data Builtin var kit where
   BuiltinFail :: Builtin var (SimpleKit var)
@@ -30,3 +35,4 @@ data SimpleKit var
               , builtinType  :: Value var
               , builtinValue :: Value var
               }
+  deriving (Generic, Hashable)

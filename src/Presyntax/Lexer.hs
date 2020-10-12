@@ -16,22 +16,22 @@ module Presyntax.Lexer
   , ParseException(..)
   ) where
 
-import qualified Text.Megaparsec.Char.Lexer as L
-import Text.Megaparsec.Char as P
-import Text.Megaparsec as P
+import Control.Exception (Exception(..))
+import Control.Monad (when)
 
+import Data.List.NonEmpty (NonEmpty((:|)))
 import qualified Data.HashSet as HashSet
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import Data.List.NonEmpty (NonEmpty((:|)))
 import Data.HashSet (HashSet)
+import Data.Coerce (coerce)
+import Data.Char (isSpace)
 import Data.Text (Text)
 import Data.Void (Void)
 
-import Control.Monad (when)
-import Control.Exception (Exception(..))
-import Data.Coerce (coerce)
-import Data.Char (isSpace)
+import qualified Text.Megaparsec.Char.Lexer as L
+import Text.Megaparsec.Char as P
+import Text.Megaparsec as P
 
 type Parser = Parsec Void Text
 

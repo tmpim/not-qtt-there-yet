@@ -2,17 +2,21 @@
 {-# LANGUAGE FlexibleContexts, ScopedTypeVariables #-}
 module Qtt.Evaluate where
 
+import Check.Fresh
+
 import Control.Monad.Reader.Class (MonadReader, ask)
+import Control.Monad.Reader (ReaderT(runReaderT))
 import Control.Monad.IO.Class (liftIO, MonadIO)
 import Control.Concurrent
+import Control.Comonad
+
+import Data.Hashable
 
 import Qtt.Environment
 import Qtt
+
 import System.IO.Unsafe (unsafePerformIO)
-import Control.Monad.Reader (ReaderT(runReaderT))
-import Check.Fresh
-import Data.Hashable
-import Control.Comonad
+
 
 evaluate :: (MonadReader (Env a) m, Ord a, Show a, Fresh a) => Term a -> m (Value a)
 evaluate (Elim a) = evaluateNeutral a

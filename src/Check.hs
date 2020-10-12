@@ -1,33 +1,38 @@
 {-# LANGUAGE FlexibleContexts #-}
 module Check where
 
+import Check.Subsumes ( subsumes, isPiType )
+import Check.TypeError ( TypeError(..) )
+import Check.Fresh
+import Check.Monad
+import Check.Data
+
 import Control.Monad.Reader
 
 import qualified Data.HashMap.Strict as Map
-import qualified Data.HashSet as Set
 import qualified Data.Sequence as Seq
+import qualified Data.HashSet as Set
+import qualified Data.Text as T
+import qualified Data.L as P
 import Data.Sequence (Seq)
 import Data.Traversable
 import Data.Foldable
 
+import Driver.Query
+
 import qualified Presyntax as P
+import Presyntax.Context
 
 import Qtt.Environment
+import Qtt.Evaluate
 import Qtt
 
-import Check.TypeError ( TypeError(..) )
-import Check.Subsumes ( subsumes, isPiType )
-import Check.Monad
-import Check.Fresh
-import Check.Data
-import Qtt.Evaluate
-import Driver.Query
-import qualified Data.Text as T
-import qualified Data.L as P
 
 
 checkLoc :: TypeCheck a m => P.ExprL a -> Value a -> m (Term a)
-checkLoc t v = withLocation t $ \ex -> checkRaw ex v
+checkLoc t v = withLocation t $ \ex -> do
+  attachTypeToLoc v
+  checkRaw ex v
 
 checkRaw :: TypeCheck a m => P.Expr P.L a -> Value a -> m (Term a)
 checkRaw v (VPi b@Binder{visibility=Invisible} rng) | not (implicitLam v)
@@ -48,8 +53,9 @@ checkRaw P.Set value = do
 checkRaw (P.Lam vis var body) term = do
   (dom, range, _wp) <- isPiType vis (Just var) term
   term <-
-    assume var dom $
-      checkLoc body (range (valueVar var))
+    inContext BodyContext $
+      assume var dom $
+        checkLoc body (range (valueVar var))
   pure (Lam var term)
 
 checkRaw (P.Pi vis var domain range) i = do
@@ -60,7 +66,7 @@ checkRaw (P.Pi vis var domain range) i = do
   term <- checkLoc domain dr
   domain <- evaluate term
   assume var domain $ do
-    range <- checkLoc range dr
+    range <- inContext BodyContext $ checkLoc range dr
     pure (Pi (Binder var vis term) range)
 
 checkRaw P.Hole ty = do
@@ -78,7 +84,10 @@ checkRaw exp expected = do
   pure (quote (w nf))
 
 inferLoc :: TypeCheck a m => P.ExprL a -> m (Elim a, Value a)
-inferLoc ex = withLocation ex inferRaw
+inferLoc ex = withLocation ex $ \ex -> do
+  (elim, t) <- inferRaw ex
+  attachTypeToLoc t
+  pure (elim, t)
 
 inferRaw :: TypeCheck a m => P.Expr P.L a -> m (Elim a, Value a)
 inferRaw (P.Var a) = do
@@ -86,9 +95,9 @@ inferRaw (P.Var a) = do
   (,) (if isc then Con a else Var a) <$> lookupVariable a
 
 inferRaw (P.App t a b) = do
-  (elimA, tyA) <- inferLoc a
+  (elimA, tyA) <- inContext FunctionContext $ inferLoc a
   (dom, range, wp) <- isPiType t Nothing tyA
-  termB <- checkLoc b dom
+  termB <- inContext ArgumentContext $ checkLoc b dom
   nfB <- evaluate termB
   pure (wp elimA `App` termB, range nfB)
   
@@ -180,7 +189,7 @@ checkDeclRaw (P.DataStmt (P.DataDecl name dataParams dataKind dataCons)) = do
         . foldr (\((a, b), c) r -> declare a b c . r) id (zip (tail sorts) fakeCons)
         . declare eliminator induction recursor
         . local (\x -> x { toplevel     = Set.union (Set.fromList (eliminator:map fst sorts)) (toplevel x)
-                          , constructors = Set.union (Set.fromList (map fst sorts)) (constructors x) })
+                         , constructors = Set.union (Set.fromList (map fst sorts)) (constructors x) })
         )
 
 checkDeclRaw (P.Include file) = do

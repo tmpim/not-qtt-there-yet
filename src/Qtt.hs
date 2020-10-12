@@ -12,16 +12,20 @@
 module Qtt where
 
 import Control.Concurrent (MVar)
-
-import Data.Sequence (Seq)
-import Data.Range ( Range )
-import qualified Data.Sequence as Seq
-import Data.Hashable
-import Data.HashSet (HashSet)
-import qualified Data.HashSet as HashSet
-import GHC.Generics (Generic)
-import Data.L
 import Control.Comonad
+
+import qualified Data.HashSet as HashSet
+import qualified Data.Sequence as Seq
+import Data.HashSet (HashSet)
+import Data.Range ( Range )
+import Data.Sequence (Seq)
+import Data.Hashable
+import Data.L
+
+import GHC.Generics (Generic)
+
+import Presyntax.Context
+
 
 data Visibility = Visible | Invisible
   deriving (Eq, Show, Ord, Generic, Hashable)
@@ -31,7 +35,7 @@ data Binder t a =
          , visibility :: Visibility
          , domain     :: t a
          }
-  deriving (Eq, Ord, Generic, Hashable)
+  deriving (Eq, Ord, Generic, Hashable, Show)
 
 data Term a
   -- Both impredicative universes, with Prop : Set and Set : Set (unfortunately)
@@ -61,6 +65,7 @@ data Meta a
        , metaLocation    :: Range
        , metaExpected    :: Value a
        , metaTelescope   :: [Binder Value a]
+       , metaContext     :: Maybe SyntaxContext
        }
   deriving (Eq)
 
@@ -161,12 +166,20 @@ nonLocalVars = goTerm mempty mempty where
   goNeutral !scope !free (Cut a b) = goTerm scope (goTerm scope free a) b
   goNeutral !scope !free (App f x) = goTerm scope (goNeutral scope free f) x
 
+
+metaGoal :: Meta a -> Value a
+metaGoal meta =
+  let dropT (Binder{Qtt.var = v}:bs) (VPi _ rng) = dropT bs (rng (valueVar v))
+      dropT [] t = t
+      dropT _ _ = undefined
+   in dropT (metaTelescope meta) (metaExpected meta)
+
 instance (Eq a, Show a) => Show (Term a) where
   showsPrec prec ex =
     case ex of
       Lam x p ->
         showParen (prec >= 1) $
-          showChar 'λ' . shows x . showString ". " . showsPrec 0 p
+          showChar 'λ' . showChar ' ' . shows x . showString " → " . showsPrec 0 p
       Pi (Binder var vis d) r
         | isVarAlive var r ->
           showParen (prec >= 1) $
@@ -218,6 +231,7 @@ instance (Hashable var, Eq var) => Hashable (Value var) where
 
 instance (Eq var, Show var) => Show (Value var) where
   show = show . quote
+  showsPrec p = showsPrec p . quote
 
 instance Eq var => Eq (Value var) where
   VNe a == VNe b = a == b
@@ -231,3 +245,4 @@ instance Eq var => Eq (Value var) where
 
 instance (Show var, Eq var) => Show (Neutral var) where
   show = show . quoteNeutral
+  showsPrec p = showsPrec p . quoteNeutral

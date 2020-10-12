@@ -7,15 +7,17 @@ module Presyntax where
 
 import Check.Fresh
 
+import qualified Data.HashSet as HashSet
 import qualified Data.Text as T
-import Data.Hashable
+import Data.HashSet (HashSet)
 import Data.Text (Text)
+import Data.Hashable
+import Data.L
+
+import GHC.Generics (Generic)
 
 import Qtt (Visibility(..))
-import GHC.Generics (Generic)
-import Data.HashSet (HashSet)
-import qualified Data.HashSet as HashSet
-import Data.L
+
 
 data Expr f a
   = Var a
@@ -27,6 +29,7 @@ data Expr f a
   | Set
   | Prop
   | Hole
+  deriving Generic
 
 exprFreeVars :: (Eq a, Hashable a, Foldable f) => Expr f a -> HashSet a
 exprFreeVars (Var a) = HashSet.singleton a
@@ -39,13 +42,13 @@ exprFreeVars Set = mempty
 exprFreeVars Prop = mempty
 exprFreeVars Hole = mempty
 
+deriving instance (forall a. Hashable a => Hashable (f a), Hashable a) => Hashable (Expr f a)
 deriving instance (forall a. Show a => Show (f a), Show a) => Show (Expr f a)
 deriving instance (forall a. Eq a => Eq (f a), Eq a) => Eq (Expr f a)
 
 data Var
   = Intro Text
   | Refresh Text Int
-  | Qualified Var Var
   deriving (Eq, Ord, Generic, Hashable)
 
 instance Fresh Var where
@@ -53,18 +56,15 @@ instance Fresh Var where
 
   refresh (Intro v) = Refresh v <$> fresh
   refresh (Refresh v x) = Refresh v . (x +) <$> fresh
-  refresh (Qualified x y) = Qualified x <$> refresh y
 
   freshWithHint c = Refresh (T.pack c) <$> fresh
 
   derive s (Intro v) = Intro (v <> T.pack s)
   derive s (Refresh v x) = Refresh (v <> T.pack s) x
-  derive s (Qualified x y) = Qualified x (derive s y)
 
 getVar :: Var -> Text
 getVar (Intro x)       = x
 getVar (Refresh t x)   = t <> T.singleton '$' <> T.pack (show x)
-getVar (Qualified x y) = getVar x <> T.singleton '.' <> getVar y
 
 instance Show Var where
   show = T.unpack . getVar
@@ -77,6 +77,7 @@ data Decl f var
   | DataStmt    (DataDecl f var)
 
   | Include     (f Text)
+  deriving (Generic)
 
 data DataDecl f var
   = DataDecl { dataName         :: var
@@ -84,9 +85,12 @@ data DataDecl f var
              , dataKind         :: f (Expr f var)
              , dataConstructors :: [f (var, f (Expr f var))]
              }
+  deriving (Generic)
 
+deriving instance (forall a. Hashable a => Hashable (f a), Hashable a) => Hashable (DataDecl f a)
 deriving instance (forall a. Show a => Show (f a), Show a) => Show (DataDecl f a)
 deriving instance (forall a. Eq a => Eq (f a), Eq a) => Eq (DataDecl f a)
 
-deriving instance (forall a. Show a => Show (f a), Show a) => Show (Decl f a)
-deriving instance (forall a. Eq a => Eq (f a), Eq a) => Eq (Decl f a)
+deriving instance (forall a. Hashable a => Hashable (f a), Hashable a) => Hashable (Decl f a)
+deriving instance (forall a. Show a => Show (f a), Show a)             => Show (Decl f a)
+deriving instance (forall a. Eq a => Eq (f a), Eq a)                   => Eq (Decl f a)

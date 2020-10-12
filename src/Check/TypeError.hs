@@ -2,11 +2,13 @@
 {-# LANGUAGE DeriveAnyClass #-}
 module Check.TypeError where
 
+import Data.List (intercalate)
+import Data.Hashable
+
+import GHC.Generics (Generic)
+
 import Qtt (Visibility(..), Term, Elim, quote, Meta, Value)
 
-import Data.List (intercalate)
-import GHC.Generics (Generic)
-import Data.Hashable
 
 data TypeError a
   = NotInScope a

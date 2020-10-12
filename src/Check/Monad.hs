@@ -8,34 +8,36 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Check.Monad where
 
-import Control.Monad.Writer.Strict
+import Check.TypeError
+import Check.Fresh
+
 import Control.Concurrent (putMVar, tryTakeMVar, tryReadMVar, modifyMVar_, newMVar, newEmptyMVar)
+import Control.Exception (Exception, catch)
+import Control.Monad.Trans.Control
+import Control.Monad.Writer.Strict
 import Control.Monad.Except
 import Control.Monad.Reader
+import Control.Monad.Base
 
+import qualified Data.IntervalMap.FingerTree as IntervalMap
 import qualified Data.HashMap.Compat as Map
+import qualified Data.HashSet as HashSet
 import qualified Data.Sequence as Seq
 import qualified Data.HashSet as Set
 import Data.HashSet (HashSet)
 import Data.Sequence (Seq)
 import Data.Range
 
+import Driver.Query
+
 import Qtt.Environment
+import Qtt.Builtin
 import Qtt
 
-import Check.TypeError
-import Check.Fresh
-
-
 import Rock (fetch, Task, MonadFetch)
-import Driver.Query
-import Control.Monad.Trans.Control
-import Control.Monad.Base
-import Control.Exception (Exception, catch)
 
 import Type.Reflection ( Typeable )
-import qualified Data.HashSet as HashSet
-import Qtt.Builtin
+
 
 type TypeCheck var m =
   ( Fresh var, Typeable var -- var is a variable type
@@ -63,12 +65,15 @@ defer m s r =
     go eq Nothing = Just (Seq.singleton eq)
     go eq (Just s) = Just (s Seq.:|> eq)
 
-freshMeta :: (MonadReader (Env a) m, MonadIO m, Fresh a, Ord a, Show a) => Value a -> m (Value a)
+freshMeta :: (MonadReader (Env a) m, MonadIO m, Fresh a, Ord a, Show a)
+          => Value a -> m (Value a)
 freshMeta expected = do
   id <- fresh
   top <- asks toplevel
   tele <- asks (Map.toList . flip Map.withoutKeys top . assumptions)
   loc <- asks locationStack
+
+  ctx <- asks syntaxContext
 
   let quantify ((a, b):xs) t = VPi Binder{ visibility = Visible, domain = b, var = a } (\_ -> quantify xs t)
       quantify [] t = t
@@ -81,6 +86,7 @@ freshMeta expected = do
                <*> pure (head loc)
                <*> pure (quantify tele expected)
                <*> pure (teleify tele)
+               <*> pure ctx
 
   unsolved <- asks unsolvedMetas
   liftIO . modifyMVar_ unsolved $ pure . Set.insert meta
@@ -157,6 +163,12 @@ lookupVariable v = do
 
 isConstructor :: forall m var. TypeCheck var m => var -> m Bool
 isConstructor v = asks (Set.member v . constructors)
+
+attachTypeToLoc :: forall m var. TypeCheck var m => Value var -> m ()
+attachTypeToLoc ty = do
+  t <- ask
+  let int = rangeToInterval (head (locationStack t))
+  liftIO . modifyMVar_ (interestingIntervals t) $ pure . IntervalMap.insert int ty
 
 data TypeErrorException var = Tee (TypeError var) | Teer (TypeError var) [Range]
   deriving (Eq, Show, Exception)

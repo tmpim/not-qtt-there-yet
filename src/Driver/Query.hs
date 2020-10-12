@@ -1,30 +1,43 @@
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE MagicHash #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 module Driver.Query where
 
+import Control.Concurrent (newMVar, MVar)
+
+import Data.HashMap.Strict (HashMap)
 import qualified Data.Text as T
+import Data.Constraint.Extras
+import Data.HashSet (HashSet)
+import Data.Sequence (Seq)
 import Data.GADT.Compare
+import Data.Constraint
+import Data.GADT.Show
 import Data.Hashable
+import Data.IORef
+import Data.Range
 import Data.Some
+import Data.L
+
+import GHC.Generics (Generic)
 
 import Presyntax
 
+import Qtt.Environment
+import Qtt.Builtin
 import Qtt
+
 import Type.Reflection
 
-import Data.HashMap.Strict (HashMap)
-import Control.Concurrent (newMVar, MVar)
-import Data.Sequence (Seq)
-import Data.IORef
-import Data.GADT.Show
-import Qtt.Environment
-import Data.HashSet (HashSet)
-import Data.L
-import Qtt.Builtin
 
 data Query var a where
   GoalFiles     :: Query var [FilePath]
@@ -39,6 +52,7 @@ data Query var a where
 
   Zonked        :: Value var -> Query var (Value var)
   MakeBuiltin   :: Builtin var kit -> Query var kit
+  ModuleAnnot   :: FilePath -> SourcePos -> Query var [Value var]
 
 instance (Eq var, Hashable var) => Hashable (Query var a) where
   hashWithSalt salt = \case
@@ -51,6 +65,7 @@ instance (Eq var, Hashable var) => Hashable (Query var a) where
     UnsolvedMetas   -> hashWithSalt salt (5 :: Int)
     Zonked s        -> hashWithSalt (hashWithSalt salt (6 :: Int)) (quote s)
     MakeBuiltin s   -> hashWithSalt (hashWithSalt salt (7 :: Int)) s
+    ModuleAnnot s r -> hashWithSalt (hashWithSalt (hashWithSalt salt (8 :: Int)) (newRangeUnchecked r r)) s
 
 instance (Eq var, Hashable var) => Hashable (Some (Query var)) where
   hashWithSalt salt (Some x) = hashWithSalt salt x
@@ -65,7 +80,7 @@ data ModuleMap var =
        -- ^ Maps c : ... → X => data X
      , moduleImports :: HashMap var (ModuleMap var)
      }
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic, Hashable)
 
 data DataInfo var =
   DI { diName :: var
@@ -79,7 +94,7 @@ data DataInfo var =
 
 data PersistentState a =
   PS { psUnsolved    :: MVar (HashSet (Meta a))
-     , psDeferred    :: MVar (HashMap (Meta a) (Seq (Constraint a)))
+     , psDeferred    :: MVar (HashMap (Meta a) (Seq (Qtt.Constraint a)))
      , psEliminators :: HashMap a (Value a, Value a)
      }
 
@@ -111,3 +126,33 @@ instance Eq var => GEq (Query var) where
     | Just Refl <- geq a b = Just Refl
     | otherwise = Nothing
   geq _ _ = Nothing
+
+instance ArgDict c (Query var) where
+  type ConstraintsFor (Query var) c
+    = (c [FilePath],
+      c (IORef (PersistentState var)),
+      c [T.Text],
+      c [L (Decl L var)],
+      c (ModuleMap var),
+      c (Env var),
+      c (MVar (HashSet (Meta var))),
+      c (Value var),
+      c [Value var],
+      c (SimpleKit var))
+  argDict = \case
+    GoalFiles {}     -> Dict
+    Persistent {}    -> Dict
+    ModuleText {}    -> Dict
+    ModuleCode {}    -> Dict
+    ModuleMap {}     -> Dict
+    ModuleEnv {}     -> Dict
+    UnsolvedMetas {} -> Dict
+    Zonked {}        -> Dict
+    MakeBuiltin BuiltinFail -> Dict
+    ModuleAnnot {}   -> Dict
+
+instance Hashable (IORef a) where
+  hashWithSalt s _ = s
+
+instance Hashable (MVar a) where
+  hashWithSalt s _ = s

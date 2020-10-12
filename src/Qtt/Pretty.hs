@@ -4,9 +4,10 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import Data.Set
 
+import Presyntax (Var(..))
+
 import Qtt
 
-import Presyntax (Var(..))
 
 prettify :: Set T.Text -> Value Var -> Value Var
 prettify scope (VFn arg cont) =

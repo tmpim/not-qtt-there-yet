@@ -1,13 +1,15 @@
 {-# LANGUAGE GADTs #-}
 module Driver.WiredIn where
 
+import Check.Fresh
+
 import Driver.Query
+
+import Qtt.Builtin
+import Qtt
 
 import Rock
 
-import Qtt.Builtin
-import Check.Fresh
-import Qtt
 
 makeBuiltin :: Fresh var => Builtin var a -> Task (Query var) a
 makeBuiltin BuiltinFail = do

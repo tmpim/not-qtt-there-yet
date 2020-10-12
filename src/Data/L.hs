@@ -5,11 +5,13 @@
 {-# LANGUAGE DeriveFunctor #-}
 module Data.L where
 
+import Control.Comonad
+
 import Data.Hashable
 import Data.Range
 
 import GHC.Generics (Generic)
-import Control.Comonad
+
 
 data L a
   = L { lThing :: a

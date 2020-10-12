@@ -2,16 +2,19 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Presyntax.Parser where
 
+import Control.Exception (throwIO)
+
+import Data.Text (Text)
 import Data.Range
+import Data.L
 
 import Presyntax.Lexer
 import Presyntax
-import Data.Text (Text)
-import Control.Exception (throwIO)
-import qualified Text.Megaparsec.Char.Lexer as L
 
 import Qtt (Visibility(..))
-import Data.L
+
+import qualified Text.Megaparsec.Char.Lexer as L
+
 
 loc :: Parser a -> Parser (L a)
 loc k = do

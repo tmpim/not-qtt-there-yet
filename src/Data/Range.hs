@@ -1,10 +1,19 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
-module Data.Range (Range(rangeStart, rangeEnd, rangeFile), newRange, newRangeUnchecked) where
+module Data.Range
+  ( Range(rangeStart, rangeEnd, rangeFile)
+  , SourcePos(..), mkPos, unPos
+  , newRange
+  , newRangeUnchecked
+  , includes
+
+  , intervalToRange, rangeToInterval
+  ) where
 
 import Text.Megaparsec.Pos
 import Data.Hashable
 import GHC.Generics 
+import Data.IntervalMap.FingerTree (Interval(..))
 
 data Range =
   Range { rangeStart :: SourcePos
@@ -35,3 +44,15 @@ newRangeUnchecked a b =
 
 instance Semigroup Range where
   Range a _ l <> Range _ b _ = Range a b l
+
+includes :: Range -> Range -> Bool
+includes (Range bigStart bigEnd l) (Range smallStart smallEnd l') =
+     l == l'
+  && smallStart >= bigStart
+  && smallEnd <= bigEnd
+
+rangeToInterval :: Range -> Interval SourcePos
+rangeToInterval (Range a b _) = Interval a b
+
+intervalToRange :: Interval SourcePos -> Range
+intervalToRange (Interval a b) = newRangeUnchecked a b

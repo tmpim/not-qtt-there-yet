@@ -4,28 +4,26 @@
 {-# LANGUAGE RecordWildCards #-}
 module Check.Subsumes where
 
+import Check.TypeError
+import Check.Fresh
+import Check.Monad
+
+import Control.Monad.Reader (asks)
 import Control.Monad.IO.Class
+import Control.Concurrent
+import Control.Comonad
 
 import qualified Data.HashMap.Compat as Map
+import qualified Data.Sequence as Seq
 import qualified Data.HashSet as Set
 import Data.HashSet (HashSet)
+import Data.Foldable (for_)
 import Data.Sequence (Seq)
-
-import Check.TypeError
-import Check.Monad
+import Data.Hashable
 
 import Qtt.Environment
 import Qtt.Evaluate
 import Qtt
-
-import Control.Concurrent
-import qualified Data.Sequence as Seq
-import Data.Foldable (for_)
-
-import Check.Fresh
-import Control.Monad.Reader (asks)
-import Data.Hashable
-import Control.Comonad
 
 
 subsumes :: TypeCheck a m

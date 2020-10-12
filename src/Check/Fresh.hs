@@ -3,9 +3,12 @@
 module Check.Fresh where
 
 import Control.Monad.IO.Class (liftIO, MonadIO)
+
 import Data.IORef (newIORef, writeIORef, readIORef, IORef)
-import System.IO.Unsafe (unsafePerformIO)
 import Data.Hashable
+
+import System.IO.Unsafe (unsafePerformIO)
+
 
 class (Eq a, Ord a, Show a, Hashable a) => Fresh a where
   fresh :: MonadIO m => m a

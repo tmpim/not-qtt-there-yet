@@ -31,8 +31,13 @@ and its definition is entirely implied by its type.)
 -}
 module Check.Data where
 
-import Control.Monad.Identity ( Identity(runIdentity) )
+import Check.TypeError
+import Check.Subsumes
+import Check.Fresh
+import Check.Monad
+
 import Control.Monad.Except (catchError, MonadError(throwError))
+import Control.Monad.Identity ( Identity(runIdentity) )
 import Control.Arrow
 
 import qualified Data.Map.Strict as Map
@@ -41,14 +46,10 @@ import Data.Sequence (Seq)
 import Data.Traversable
 import Data.Foldable
 
-import Check.Subsumes
-import Check.TypeError
-import Check.Fresh
-import Check.Monad
-
 import Qtt.Environment
-import Qtt
 import Qtt.Evaluate
+import Qtt
+
 
 data Data var =
   Data { dataName :: var
