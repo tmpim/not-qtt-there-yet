@@ -37,6 +37,8 @@ import Qtt
 import Rock (fetch, Task, MonadFetch)
 
 import Type.Reflection ( Typeable )
+import Data.L (L(..))
+import qualified Qtt.Environment as Env
 
 
 type TypeCheck var m =
@@ -75,10 +77,10 @@ freshMeta expected = do
 
   ctx <- asks syntaxContext
 
-  let quantify ((a, b):xs) t = VPi Binder{ visibility = Visible, domain = b, var = a } (\_ -> quantify xs t)
+  let quantify ((a, b):xs) t = VPi Binder{ visibility = Visible, domain = lThing b, var = a } (\_ -> quantify xs t)
       quantify [] t = t
 
-      teleify = map (\(a, b) -> Binder { visibility = Visible, domain = b, var = a })
+      teleify = map (\(a, b) -> Binder { visibility = Visible, domain = lThing b, var = a })
 
   meta <- liftIO $ MV id -- metavariable identifier
                <$> newEmptyMVar -- metavariable solution
@@ -158,8 +160,13 @@ lookupVariable :: forall m var. TypeCheck var m => var -> m (Value var)
 lookupVariable v = do
   t <- asks (Map.lookup v . assumptions)
   case t of
-    Just ty -> pure ty
+    Just ty -> pure (lThing ty)
     Nothing -> typeError (NotInScope v)
+
+assume :: forall m var b. TypeCheck var m => var -> Value var -> m b -> m b
+assume n v k = do
+  ~(t:_) <- asks locationStack
+  Env.assume n (L v t) k
 
 isConstructor :: forall m var. TypeCheck var m => var -> m Bool
 isConstructor v = asks (Set.member v . constructors)

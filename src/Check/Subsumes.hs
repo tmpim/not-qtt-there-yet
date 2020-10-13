@@ -21,7 +21,7 @@ import Data.Foldable (for_)
 import Data.Sequence (Seq)
 import Data.Hashable
 
-import Qtt.Environment
+import Qtt.Environment hiding (assume)
 import Qtt.Evaluate
 import Qtt
 

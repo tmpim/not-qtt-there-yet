@@ -7,6 +7,8 @@ module Presyntax where
 
 import Check.Fresh
 
+import Control.Comonad
+
 import qualified Data.HashSet as HashSet
 import qualified Data.Text as T
 import Data.HashSet (HashSet)
@@ -22,8 +24,8 @@ import Qtt (Visibility(..))
 data Expr f a
   = Var a
   | App Visibility (f (Expr f a)) (f (Expr f a))
-  | Lam Visibility a (f (Expr f a))
-  | Pi  Visibility a (f (Expr f a)) (f (Expr f a))
+  | Lam Visibility (f a) (f (Expr f a))
+  | Pi  Visibility (f a) (f (Expr f a)) (f (Expr f a))
   | Cut (f (Expr f a)) (f (Expr f a))
   | Let a (f (Expr f a)) (f (Expr f a))
   | Set
@@ -31,11 +33,11 @@ data Expr f a
   | Hole
   deriving Generic
 
-exprFreeVars :: (Eq a, Hashable a, Foldable f) => Expr f a -> HashSet a
+exprFreeVars :: (Eq a, Hashable a, Foldable f, Comonad f) => Expr f a -> HashSet a
 exprFreeVars (Var a) = HashSet.singleton a
 exprFreeVars (App _ a b) = foldMap exprFreeVars a <> foldMap exprFreeVars b
-exprFreeVars (Lam _ a b) = HashSet.delete a $ foldMap exprFreeVars b
-exprFreeVars (Pi _ v a b) = foldMap exprFreeVars a <> HashSet.delete v (foldMap exprFreeVars b)
+exprFreeVars (Lam _ a b) = HashSet.delete (extract a) $ foldMap exprFreeVars b
+exprFreeVars (Pi _ v a b) = foldMap exprFreeVars a <> HashSet.delete (extract v) (foldMap exprFreeVars b)
 exprFreeVars (Let v a b) = foldMap exprFreeVars a <> HashSet.delete v (foldMap exprFreeVars b)
 exprFreeVars (Cut a b) = foldMap exprFreeVars a <> foldMap exprFreeVars b
 exprFreeVars Set = mempty

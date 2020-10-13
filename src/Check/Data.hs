@@ -46,7 +46,6 @@ import Data.Sequence (Seq)
 import Data.Traversable
 import Data.Foldable
 
-import Qtt.Environment
 import Qtt.Evaluate
 import Qtt
 

@@ -1,3 +1,4 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -9,53 +10,56 @@
 {-# LANGUAGE RankNTypes #-}
 module Driver.Editor.Main where
 
-import qualified Language.Haskell.LSP.Control as Ctrl
-import qualified Language.Haskell.LSP.Core as L
-import qualified Language.Haskell.LSP.Messages as L
-import qualified Language.Haskell.LSP.Types as L
-import qualified Language.Haskell.LSP.Types.Lens as L
-import qualified Language.Haskell.LSP.Core as Core
-import Language.Haskell.LSP.Messages
-import Language.Haskell.LSP.Core
+import Check.TypeError
 
 import Control.Monad.Trans.Control
-import Control.Monad.Reader
-import Control.Exception (catch)
+import Control.Exception (SomeException, catch)
 import Control.Concurrent.STM
+import Control.Monad.Reader
 import Control.Concurrent
 import Control.Lens
 
 import qualified Data.HashMap.Compat as HashMap
 import qualified Data.HashSet as HashSet
 import qualified Data.Sequence as Seq
-import qualified Data.Text as T
 import Data.HashMap.Compat (HashMap)
+import qualified Data.Text.IO as T
 import Data.HashSet ( HashSet )
-import Data.Traversable
+import qualified Data.Text as T
 import Data.Sequence (Seq)
+import Data.Traversable
 import Data.Foldable
 import Data.Default
+import Data.Aeson
 import Data.IORef
 import Data.Range
 import Data.Void
 
-import Check.TypeError
-import Driver.Rules
+import Driver.Editor.Refine
+import Driver.Editor.Monad
 import Driver.Query
+import Driver.Rules
 
-import Qtt
+import qualified Language.Haskell.LSP.Control as Ctrl
+import qualified Language.Haskell.LSP.Types.Lens as L
+import qualified Language.Haskell.LSP.Messages as L
+import qualified Language.Haskell.LSP.Core as Core
+import qualified Language.Haskell.LSP.Types as L
+import qualified Language.Haskell.LSP.Core as L
+import qualified Language.Haskell.LSP.VFS as L
+import Language.Haskell.LSP.Messages
+import Language.Haskell.LSP.Core
 
 import Presyntax.Lexer (ParseException(..))
 import Presyntax (Var)
 
-import Text.Megaparsec hiding (State)
+import Qtt.Pretty (prettify)
+import Qtt
 
 import qualified Rock
-import Data.Aeson
-import Driver.Editor.Monad
-import Driver.Editor.Refine
-import qualified Language.Haskell.LSP.VFS as L
-import qualified Data.Text.IO as T
+
+import Text.Megaparsec hiding (State)
+
 
 runLSP :: IO ()
 runLSP = do
@@ -83,7 +87,16 @@ runLSP = do
               rules' :: Rock.Rules (Query Var)
 
               state = State funs errorBuckets pendingCallbacks versions
-            _ <- forkIO (runReaderT (messageHandler rules' rin) state)
+
+            let 
+              start = runReaderT (messageHandler rules' rin) state
+              loop =
+                catch start $ \(e :: SomeException) -> do
+                  -- TODO: Pop this up visibly
+                  L.sendErrorLogS (L.sendFunc funs) (T.pack (show e))
+                  L.sendErrorLogS (L.sendFunc funs) (T.pack "Restarting worker thread...")
+                  loop
+            _ <- forkIO loop
             pure Nothing
         }
   t <- Ctrl.run callbacks (lspHandlers rin) lspOptions Nothing
@@ -204,7 +217,7 @@ handleRequest (ReqHover msg) = do
         [] -> sendMessage msg L.RspHover Nothing
         _:_ -> do
           ty <- Rock.fetch (Zonked (last t))
-          let markup = L.MarkupContent L.MkPlainText (T.pack (show ty))
+          let markup = L.MarkupContent L.MkPlainText (T.pack (show (prettify mempty ty)))
           sendMessage msg L.RspHover (Just (L.Hover (L.HoverContents markup) Nothing))
     Nothing -> sendMessage msg L.RspHover Nothing
 

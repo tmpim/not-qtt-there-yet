@@ -39,7 +39,7 @@ import Qtt
 
 data Env a =
   Env
-    { assumptions   :: HashMap a (Value a)
+    { assumptions   :: HashMap a (L (Value a))
     , declarations  :: HashMap a (Value a)
     , modules       :: HashMap a (Env a)
     , unproven      :: HashMap a (L ())
@@ -106,14 +106,14 @@ emptyEnvWithReporter path report = do
 report :: (MonadIO m, MonadReader (Env a) m) => String -> m ()
 report s = ($ s) =<< asks reporterFunction
 
-assume :: (MonadReader (Env a) m, Hashable a, Eq a) => a -> Value a -> m b -> m b
+assume :: (MonadReader (Env a) m, Hashable a, Eq a) => a -> L (Value a) -> m b -> m b
 assume x t = local (\env -> env { assumptions  = Map.insert x t (assumptions env)
                                 , constructors = Set.delete x (constructors env)
                                 , toplevel     = Set.delete x (toplevel env)
                                 , declarations = Map.delete x (declarations env)
                                 })
 
-assuming :: (MonadReader (Env a) m, Hashable a, Eq a) => [(a, Value a)] -> m b -> m b
+assuming :: (MonadReader (Env a) m, Hashable a, Eq a) => [(a, L (Value a))] -> m b -> m b
 assuming vars = local (\env -> env { assumptions = Map.union (assumptions env) (Map.fromList vars)
                                    , constructors = Set.difference (constructors env) (Set.fromList (map fst vars))
                                    })
@@ -128,7 +128,7 @@ addSubmodule name k =
 envVariables :: Env a -> [a]
 envVariables = Map.keys . assumptions
 
-declare :: (MonadReader (Env a) m, Ord a, Hashable a) => a -> Value a -> Value a -> m b -> m b
+declare :: (MonadReader (Env a) m, Ord a, Hashable a) => a -> L (Value a) -> Value a -> m b -> m b
 declare x t val = local k where
   k env = env { assumptions = Map.insert x t (assumptions env)
               , declarations = Map.insert x val (declarations env)
@@ -138,7 +138,7 @@ declare x t val = local k where
 insertDecl :: (Ord a, Hashable a) => a -> Value a -> Env a -> Env a
 insertDecl x val env = env { declarations = (Map.insert x val (declarations env)) }
 
-lookupType :: (MonadReader (Env k) m, Ord k, Hashable k) => k -> m (Maybe (Value k))
+lookupType :: (MonadReader (Env k) m, Ord k, Hashable k) => k -> m (Maybe (L (Value k)))
 lookupType var = asks (Map.lookup var . assumptions)
 
 lookupValue :: forall m var. (Fresh var, MonadReader (Env var) m, Ord var) => var -> m (Maybe (Value var))

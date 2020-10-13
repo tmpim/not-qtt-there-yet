@@ -37,12 +37,12 @@ expr0 = loc lambda <|> loc (try quantifier) <|> atom
 
 quantifier :: Parser (Expr L Var)
 quantifier = pi where
-  binder = parens ((,,) Visible   <$> identifier <*> (colon *> expr))
-       <|> braces ((,,) Invisible <$> identifier <*> (colon *> expr))
+  binder = parens ((,,) Visible   <$> loc identifier <*> (colon *> expr))
+       <|> braces ((,,) Invisible <$> loc identifier <*> (colon *> expr))
   pi = do
     (vis, name, ty) <- binder
     x <- optional arrow
-    Pi vis (Intro name) ty <$> case x of
+    Pi vis (Intro <$> name) ty <$> case x of
       Nothing -> loc pi
       Just _ -> expr
 
@@ -54,9 +54,9 @@ lambda =
   where
     lambdaForm :: Parser (Expr L Var)
     lambdaForm = do
-      (v, x) <- ((,) Visible <$> identifier) <|> ((,) Invisible <$> braces identifier)
+      (v, x) <- ((,) Visible <$> loc identifier) <|> ((,) Invisible <$> braces (loc identifier))
       t <- optional arrow
-      Lam v (Intro x) <$> case t of
+      Lam v (Intro <$> x) <$> case t of
         Nothing -> loc lambdaForm
         Just _ -> expr
 
@@ -88,9 +88,9 @@ decl =
       case c of
         Nothing -> loc do
           (vis, nam) <- arg
-          Lam vis (Intro nam) <$> definition
+          Lam vis (Intro <$> nam) <$> definition
         Just _ -> expr
-    arg = ((,) Visible <$> identifier) <|> ((,) Invisible <$> braces identifier)
+    arg = ((,) Visible <$> loc identifier) <|> ((,) Invisible <$> braces (loc identifier))
 
 dataDecl :: Parser (DataDecl L Var)
 dataDecl = L.indentBlock cuboSpaceN parseHeader where

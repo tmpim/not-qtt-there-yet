@@ -2,12 +2,9 @@
 	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
 	"name": "Quantitative Type Theory",
 	"patterns": [
-		{
-			"include": "#keywords"
-		},
-		{
-			"include": "#types"
-		}
+		{ "include": "#comments" },
+		{ "include": "#keywords" },
+		{ "include": "#types" }
 	],
 	"repository": {
 		"keywords": {
@@ -35,6 +32,14 @@
 				{
 					"name": "constants.sort.qtt",
 					"match": "\\b(Type|Prop)\\b"
+				}
+			]
+		},
+		"comments": {
+			"patterns": [
+				{
+					"name": "comment.line.double-dash.qtt",
+					"match": "--.*$"
 				}
 			]
 		}
