@@ -1,3 +1,4 @@
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -25,6 +26,7 @@ import Data.L
 import GHC.Generics (Generic)
 
 import Presyntax.Context
+import GHC.Stack
 
 
 data Visibility = Visible | Invisible
@@ -40,10 +42,8 @@ data Binder t a =
 data Term a
   -- Both impredicative universes, with Prop : Set and Set : Set (unfortunately)
   = Set | Prop
-  | Pi { piBinder :: Binder Term a
-       , range    :: Term a
-       }
-  | Lam a (Term a)
+  | Pi (Binder Term a) (Term a)
+  | Lam (Binder Term a) (Term a)
   | Elim  (Elim a)
 
   -- Interaction stuff:
@@ -71,7 +71,7 @@ data Meta a
 
 data Value var
   = VNe (Neutral var)
-  | VFn var (Value var -> Value var)
+  | VFn (Binder Value var) (Value var -> Value var)
   | VPi (Binder Value var) (Value var -> Value var)
   | VSet
   | VProp
@@ -108,10 +108,10 @@ quoteNeutral (NMeta v) = Qtt.Meta v
 quoteNeutral (NApp f x) = foldl Qtt.App (quoteNeutral f) (fmap quote x)
 
 quote :: Eq var => Value var -> Qtt.Term var
-quote (VFn var b) =
+quote (VFn bind@Binder{var} b) =
   case body of
     VNe (NApp f sp) | Just n <- etaReduceMaybe f sp var -> Elim (quoteNeutral n)
-    _ -> Lam var (quote body)
+    _ -> Lam bind{domain = quote (domain bind)} (quote body)
   where body = b (valueVar var)
 quote (VPi binder range) =
   Qtt.Pi binder{ domain = quote (domain binder) } (quote (range (valueVar (var binder))))
@@ -119,7 +119,7 @@ quote VSet = Qtt.Set
 quote VProp = Qtt.Prop
 quote (VNe v) = Qtt.Elim (quoteNeutral v)
 
-(@@) :: (Eq var, Show var) => Value var -> Value var -> Value var
+(@@) :: (HasCallStack, Eq var, Show var) => Value var -> Value var -> Value var
 VNe a @@ b = VNe $
   case a of
     NApp a xs -> NApp a (xs Seq.:|> b)
@@ -136,7 +136,8 @@ isVarAlive var (Elim c) = go c where
   go (Cut a b) = isVarAlive var a || isVarAlive var b
 isVarAlive _ Prop{} = False
 isVarAlive _ Set{} = False
-isVarAlive var (Lam v b) = v /= var && isVarAlive var b
+isVarAlive var (Lam Binder{var=v,domain=d} b) =
+  isVarAlive var d || (v /= var && isVarAlive var b)
 isVarAlive var (Pi binder@Binder{var=v} r) =
   isVarAlive var (domain binder) || (v /= var && isVarAlive var r)
 isVarAlive var (SpannedTerm x) = isVarAlive var (extract x)
@@ -151,7 +152,8 @@ etaReduceMaybe f spine var =
 nonLocalVars :: (Hashable var, Eq var) => Term var -> HashSet var
 nonLocalVars = goTerm mempty mempty where
   goTerm !scope !free (Elim t) = goNeutral scope free t
-  goTerm !scope !free (Lam x t) = goTerm (HashSet.insert x scope) free t
+  goTerm !scope !free (Lam Binder{var = v, domain = d} t) =
+    goTerm (HashSet.insert v scope) (goTerm scope free d) t
   goTerm !scope !free (Pi (Binder{var = v, domain = d}) r) =
     goTerm (HashSet.insert v scope) (goTerm scope free d) r
   goTerm !_ !x Set = x
@@ -177,7 +179,7 @@ metaGoal meta =
 instance (Eq a, Show a) => Show (Term a) where
   showsPrec prec ex =
     case ex of
-      Lam x p ->
+      Lam Binder{var=x} p ->
         showParen (prec >= 1) $
           showChar 'λ' . showChar ' ' . shows x . showString " → " . showsPrec 0 p
       Pi (Binder var vis d) r
@@ -235,10 +237,11 @@ instance (Eq var, Show var) => Show (Value var) where
 
 instance Eq var => Eq (Value var) where
   VNe a == VNe b = a == b
-  VFn var body == VFn var' body' = body (valueVar var') == body' (valueVar var)
+  VFn Binder{var} body == VFn _ body' =
+    body (valueVar var) == body' (valueVar var)
   VPi binder body == VPi binder' body' =
-       binder == binder'
-    && body (valueVar (var binder)) == body' (valueVar (var binder'))
+       domain binder == domain binder'
+    && body (valueVar (var binder)) == body' (valueVar (var binder))
   VSet == VSet = True
   VProp == VProp = True
   _ == _ = False

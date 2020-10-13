@@ -37,6 +37,7 @@ import Qtt.Builtin
 import Qtt
 
 import Type.Reflection
+import Control.Monad.IO.Class
 
 
 data Query var a where
@@ -96,10 +97,14 @@ data PersistentState a =
   PS { psUnsolved    :: MVar (HashSet (Meta a))
      , psDeferred    :: MVar (HashMap (Meta a) (Seq (Qtt.Constraint a)))
      , psEliminators :: HashMap a (Value a, Value a)
+     , psReport      :: forall m. MonadIO m => String -> m ()
      }
 
 emptyPState :: (Ord a, Hashable a) => IO (PersistentState a)
-emptyPState = PS <$> newMVar mempty <*> newMVar mempty <*> pure mempty
+emptyPState = do
+  mv <- newMVar mempty
+  mv' <- newMVar mempty
+  pure (PS mv mv' mempty (\_ -> pure ()))
 
 deriving instance (Show var, Eq var) => Show (Query var a)
 

@@ -76,6 +76,8 @@ runLSP = do
         { L.onConfigurationChange = const (pure ())
         , L.onInitialConfiguration = const (pure ())
         , L.onStartup = \funs -> do
+            modifyIORef persistent $ \ps -> ps { psReport = \x -> liftIO (sendErrorLogS (L.sendFunc funs) (T.pack x)) }
+
             let
               reader p = L.getVirtualFileFunc funs (L.toNormalizedUri (L.filePathToUri p)) >>= \case
                 Nothing -> liftIO (T.readFile p)
@@ -87,6 +89,7 @@ runLSP = do
               rules' :: Rock.Rules (Query Var)
 
               state = State funs errorBuckets pendingCallbacks versions
+
 
             let 
               start = runReaderT (messageHandler rules' rin) state

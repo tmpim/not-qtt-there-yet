@@ -232,7 +232,10 @@ makeRecursor name Data{..} =
         args = reverse acc
         skip = nArgs + nIndices + 1
         static = take (1 + nIndices + length cases) (drop nArgs args)
-    makeRecursor cases acc skip (n:rest) = VFn n (\v -> makeRecursor cases (v:acc) skip rest)
+
+    makeRecursor cases acc skip (n:rest) =
+      VFn (Binder { var = n, visibility = Visible, domain = VSet }) -- TODO: Get type info down here
+          (\v -> makeRecursor cases (v:acc) skip rest)
 
     -- Is the given value a neutral application of a constructor of this data type?
     isCon :: Map.Map var (Int, Seq (Value var) -> [Value var] -> Seq (Value var))
@@ -282,7 +285,7 @@ makeRecursor name Data{..} =
 -- Given recursor, Ξ and f, build λ Ξ → recursor (f Ξ)
 makeFun :: (Show var, Eq var) => Value var -> [Binder Value var] -> Value var -> Value var
 makeFun recursor []  x         = recursor @@ x
-makeFun recursor (Binder {var = n}:xs) f = VFn n $ \a -> makeFun recursor xs (f @@ a)
+makeFun recursor (bind:xs) f = VFn bind $ \a -> makeFun recursor xs (f @@ a)
 
 getIxTele :: TypeCheck var m => Value var -> m ([Binder Term var], Value var)
 getIxTele kind = do

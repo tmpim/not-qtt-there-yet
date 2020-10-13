@@ -22,7 +22,8 @@ evaluate :: (MonadReader (Env a) m, Ord a, Show a, Fresh a) => Term a -> m (Valu
 evaluate (Elim a) = evaluateNeutral a
 evaluate (Lam a b) = do
   env <- ask
-  pure (VFn a (\arg -> evaluateArrow b (insertDecl a arg env)))
+  a <- (\d -> a { domain = d }) <$> evaluate (domain a)
+  pure (VFn a (\arg -> evaluateArrow b (insertDecl (var a) arg env)))
 evaluate (Pi bind b) = do
   env <- ask
   bind <- (\d -> bind { domain = d }) <$> evaluate (domain bind)

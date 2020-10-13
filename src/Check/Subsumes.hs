@@ -1,3 +1,4 @@
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -17,13 +18,13 @@ import qualified Data.HashMap.Compat as Map
 import qualified Data.Sequence as Seq
 import qualified Data.HashSet as Set
 import Data.HashSet (HashSet)
-import Data.Foldable (for_)
 import Data.Sequence (Seq)
 import Data.Hashable
 
 import Qtt.Environment hiding (assume)
 import Qtt.Evaluate
 import Qtt
+import Data.Foldable
 
 
 subsumes :: TypeCheck a m
@@ -39,7 +40,7 @@ subsumes (VPi binder rng) (VPi binder' rng') | visibility binder == visibility b
   assume var (domain binder) $ do
     let cast = coe (valueVar var)
     rng <- subsumes (rng cast) (rng' (valueVar var))
-    pure (\vl -> VFn var (\b -> rng (vl @@ (coe b))))
+    pure (\vl -> VFn binder (\b -> rng (vl @@ (coe b))))
 
 subsumes (VPi b@Binder{visibility=Invisible} range) r = do
   m <- freshMeta (domain b)
@@ -48,10 +49,10 @@ subsumes (VPi b@Binder{visibility=Invisible} range) r = do
     pure (\vl -> w (vl @@ m))
 
 -- λx. e ≡ g → e ≡ g x
-subsumes (VFn var k) b =
+subsumes (VFn Binder{var} k) b =
   subsumes (k (valueVar var)) (b @@ valueVar var)
 
-subsumes b (VFn var k) =
+subsumes b (VFn Binder{var} k) =
   subsumes (b @@ valueVar var) (k (valueVar var))
 
 subsumes (VNe a) val
@@ -118,8 +119,13 @@ doSolve meta@MV{..} incomingSpine incomingVal
       val <- quote <$> zonk val
       checkScope vars val
 
+      unknownT <- valueVar <$> fresh
+
       -- Make λ spine → rhs
-      fakeLam <- evaluate $ foldr (\(VNe (NVar v)) b -> Lam v b) val spine
+      let makeLam (VNe (NVar v), t) b = Lam Binder{var = v, domain = quote t, visibility = Visible } b
+          makeLam (v, _) _ = error $ "Solving metavariable not in pattern form: " ++ show v ++ " in spine"
+
+      fakeLam <- evaluate $ foldr makeLam val $ zip (toList spine) (map domain metaTelescope ++ repeat unknownT)
 
       -- Solve it
       liftIO $ putMVar metaSlot fakeLam
@@ -184,7 +190,7 @@ checkScope set (Elim a) = go a where
 checkScope set (Pi binder range) = do
   checkScope set (domain binder)
   checkScope (Set.insert (var binder) set) range
-checkScope set (Lam var body) = checkScope (Set.insert var set) body
+checkScope set (Lam Binder{var} body) = checkScope (Set.insert var set) body
 checkScope _ Set{} = pure ()
 checkScope _ Prop{} = pure ()
 checkScope set (SpannedTerm s) = checkScope set (extract s)

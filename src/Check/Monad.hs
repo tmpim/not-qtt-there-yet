@@ -39,6 +39,7 @@ import Rock (fetch, Task, MonadFetch)
 import Type.Reflection ( Typeable )
 import Data.L (L(..))
 import qualified Qtt.Environment as Env
+import GHC.Stack
 
 
 type TypeCheck var m =
@@ -50,6 +51,7 @@ type TypeCheck var m =
 
   , MonadBase IO m
   , MonadBaseControl IO m
+  , HasCallStack
   )
 
 defer :: TypeCheck var m => Meta var -> Seq (Value var) -> Value var -> m ()
@@ -131,6 +133,11 @@ fetchTC query = control $ \runInIO ->
 
 findBuiltin :: forall m var kit. TypeCheck var m => Builtin var kit -> m kit
 findBuiltin b = fetchTC (MakeBuiltin b)
+
+logTC :: forall m var. (TypeCheck var m) => String -> String -> m ()
+logTC c p = do
+  t <- asks reporterFunction
+  t ("[" ++ c ++ "]: " ++ p)
 
 recover :: forall m var. TypeCheck var m
         => Value var

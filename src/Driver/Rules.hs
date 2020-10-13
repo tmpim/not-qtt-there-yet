@@ -116,7 +116,9 @@ runCheckerOrFail c env = do
   p <- liftIO $ readIORef pvar
   e <- runChecker c env{ unsolvedMetas = psUnsolved p
                        , deferredEqns = psDeferred p
-                       , recoveredErrors = recovered }
+                       , recoveredErrors = recovered
+                       , reporterFunction = psReport p
+                       }
   case e of
     Left (err, span) -> pure (Nothing, HashSet.singleton (err, span))
     Right x -> do

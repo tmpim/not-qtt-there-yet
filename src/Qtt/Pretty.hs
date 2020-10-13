@@ -1,3 +1,4 @@
+{-# LANGUAGE NamedFieldPuns #-}
 module Qtt.Pretty where
 
 import qualified Data.Set as Set
@@ -10,10 +11,10 @@ import Qtt
 
 
 prettify :: Set T.Text -> Value Var -> Value Var
-prettify scope (VFn arg cont) =
+prettify scope (VFn Binder{var=arg,visibility,domain} cont) =
   case cont (valueVar arg) of
     VNe (NApp f spine) | Just s <- etaReduceMaybe f spine arg -> VNe s
-    _ -> VFn arg' (prettify scope' . cont)
+    _ -> VFn (Binder arg' visibility (prettify scope domain)) (prettify scope' . cont)
   where
     (scope', var) = refreshFromScope scope (varText arg)
     arg' = Intro var

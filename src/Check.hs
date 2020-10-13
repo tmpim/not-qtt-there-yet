@@ -1,3 +1,4 @@
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE FlexibleContexts #-}
 module Check where
 
@@ -37,7 +38,7 @@ checkRaw :: TypeCheck a m => P.Expr P.L a -> Value a -> m (Term a)
 checkRaw v (VPi b@Binder{visibility=Invisible} rng) | not (implicitLam v)
   = do assume (var b) (domain b) $ do
         tm <- checkRaw v (rng (valueVar (var b)))
-        pure (Lam (var b) tm)
+        pure (Lam b{ domain = quote (domain b) } tm)
   where
     implicitLam (P.Lam v _ _) = v == Invisible
     implicitLam _ = False
@@ -58,7 +59,7 @@ checkRaw (P.Lam vis binder body) term = do
 
       assume var dom $
         checkLoc body (range (valueVar var))
-  pure (Lam var term)
+  pure (Lam Binder{var, visibility = vis, domain = quote dom} term)
 
 checkRaw (P.Pi vis binder domain range) i = do
   let var = P.lThing binder
@@ -190,8 +191,7 @@ checkDeclRaw (P.DataStmt (P.DataDecl name dataParams dataKind dataCons)) = do
       pure ((name, closed):visibleSorts, Data name (fmap P.lThing <$> params) kind_nf (map (\(a, _, b) -> (a, b)) constrs))
 
     fakeCons <- for dataCons . flip withLocation $ \(name, _) -> do
-      ignored <- refresh name
-      pure (constN ignored (length params) (VNe (NCon name)))
+      pure (constN params (VNe (NCon name)))
 
     induction <- makeInductionPrinciple the_data
     recursor <- makeRecursor eliminator the_data
@@ -214,12 +214,9 @@ checkDeclRaw (P.Include file) = do
              }
   pure (local go)
 
-const' :: var -> Value var -> Value var
-const' x v = VFn x (const v)
-
-constN :: Fresh var => var -> Int -> Value var -> Value var
-constN _ 0 x = x
-constN var n x = const' var (constN var (n - 1) x)
+constN :: Comonad w => [(var, w (Value var))] -> Value var -> Value var
+constN [] x          = x
+constN ((v, t):bs) x = VFn Binder{ var = v, visibility = Visible, domain = extract t } (const (constN bs x))
 
 checkTelescope :: (TypeCheck var m, Comonad w) => [a] -> (a -> m (var, w (Value var))) -> m [(var, w (Value var))]
 checkTelescope [] _ = pure []

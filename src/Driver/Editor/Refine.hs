@@ -36,9 +36,9 @@ offerRefinements uri diag meta = do
         text = showsPrec (maybe 0 contextPrecedence (metaContext meta)) lambda ""
         lambda = prettify mempty (makeLams binders)
 
-        makeLams :: [Binder x Var] -> Value Var
-        makeLams []     = VFn (var b) (\_ -> valueVar (Intro "_"))
-        makeLams (x:xs) = VFn (var x) (\_ -> makeLams xs)
+        makeLams :: [Binder Value Var] -> Value Var
+        makeLams []     = VFn b (\_ -> valueVar (Intro "_"))
+        makeLams (x:xs) = VFn x (\_ -> makeLams xs)
 
         label =
           if length binders >= 1
